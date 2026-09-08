@@ -133,4 +133,7 @@ Its initial full application and installed-container CI passed; the final bootst
 and failed-backup guards also passed 24 focused offline tests. Production has not
 been deployed. The publisher credential authenticates successfully, worker and
 preview cleanup login services are installed, and original intake approval remains
-enforced. Production token provisioning is separately awaiting owner authorization.
+enforced. The owner authorized a 90-day deploy token scoped only to `dylnmtthws-decklab`.
+It is stored as `FLY_API_TOKEN` in the protected GitHub production environment,
+with app access verified and approximate expiry December 7, 2026. Provisioning did
+not trigger a deployment.
