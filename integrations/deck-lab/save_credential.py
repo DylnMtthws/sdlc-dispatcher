@@ -12,6 +12,7 @@ SECRET_DIR = Path(__file__).resolve().parents[2] / ".dispatcher" / "secrets"
 CREDENTIALS = {
     "cursor": ("cursor-api-key", "Cursor API key"),
     "linear-read": ("linear-read-api-key", "Linear read-only API key"),
+    "linear-status": ("linear-status-api-key", "Linear issue-status API key"),
     "github-publisher": ("github-publisher-token", "Repository-scoped GitHub publisher token"),
 }
 

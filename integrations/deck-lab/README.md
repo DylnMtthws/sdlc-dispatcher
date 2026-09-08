@@ -36,9 +36,9 @@ changed by the automated path. Expand the allowlist deliberately as pilot eviden
 supports it. A new regression test must fail on base code and pass after the fix.
 
 Linear team/project IDs match the saved production deployment record from
-2026-09-07; `automatic_intake = false`. Confirm routing with the first real webhook.
-Configure a ready state and trusted user IDs before enabling Linear
-transition-based approval. No new production widget endpoint is needed.
+2026-09-07. The live registration now selects `automatic_intake = true` and
+`linear_intake_mode = "feedback"`; the `user-feedback` label queues eligible reports
+automatically. No ready-state transition or reporter approval is required. No new production widget endpoint is needed.
 
 ## Mac mini webhook receiver
 
@@ -116,7 +116,7 @@ For future hosts, Tailscale may require owner enablement of Funnel/HTTPS. Subscr
 to **Issues** for the feedback team. The receiver exposes only `/healthz` and the
 signed webhook POST route, limits requests globally to 120 per minute, bounds
 request bodies to 256 KB and connections to 32. Unconfigured secrets yield 503;
-invalid signatures yield 400. Reports remain `needs_review` until CLI approval.
+invalid signatures yield 400. Eligible feedback now queues automatically.
 
 To stop just this public tunnel after activation:
 
@@ -206,9 +206,9 @@ Pull requests and Commit statuses read/write:
 
 The installer starts a login worker and a five-minute expired-preview collector.
 It skips the worker until the publisher key exists. Mac mini, Docker, Tailscale and
-the login session must remain available. Current `automatic_intake = false` and
-the three-initial-attempt daily setting are unchanged; feedback still needs approval
-under the current policy. Installing the worker does not approve queued feedback.
+the login session must remain available. Current `automatic_intake = true` uses feedback mode, and `max_daily_runs = 0`
+disables the daily count gate. Coding concurrency and repair/time bounds remain.
+The Linear synchronizer backfills eligible open reports and updates their statuses.
 
 Previews expire after eight hours; the app stops on its own timeout and the collector
 removes its gateway, private Serve route and containers within five minutes. Local
@@ -229,3 +229,6 @@ Before each claimed coding job the controller fetches the registered GitHub base
 into a private Git ref; it does not move the developer checkout. Public repository
 fetches are anonymous. Private repositories require a separate read-only source
 adapter. A fetch failure stops the job before model spend.
+
+See [automatic feedback and Linear states](../../docs/automatic-feedback-linear-statuses.md)
+for status mapping, write-key setup, retries and the verified-production completion gate.

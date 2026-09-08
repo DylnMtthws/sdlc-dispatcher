@@ -4,7 +4,7 @@ A standalone, single-host tool for turning approved feedback into independently
 tested code changes. Register a project with a TOML file and a trusted development
 image. The dispatcher does not import your application or require widget changes.
 
-**v0.1 is a local pilot, not an activated production service.** It includes Linear
+**v0.1 is a single-host pilot.** It includes Linear
 webhook intake, manual JSON intake, a durable SQLite queue, Codex/Cursor workers, and an
 review-gated GitHub draft-PR publisher. Automatic intake defaults to off. No merge or
 production deployment capability is included.
@@ -22,7 +22,7 @@ rerun verification and review. See the [review and release specification](docs/g
 ```mermaid
 flowchart LR
   A[Linear or JSON report] --> B[Durable queue]
-  B --> C[Approval for report and project policy]
+  B --> C[Registered intake policy]
   C --> D[Baseline checks]
   D --> E[Isolated coding worker]
   E --> F[New regression test fails on original code]
@@ -207,3 +207,13 @@ Codex, Cursor and GitHub have live adapters. Deck Lab adds synthetic browser
 evidence, expiring private previews and a separate human-approved exact-image
 release workflow. Claude Code, OpenCode, hosted staging, AI triage and periodic
 architecture audits are future integrations.
+
+## Automatic feedback and Linear lifecycle
+
+Deck Lab now uses automatic feedback intake, with no daily run-count quota. Its
+trusted synchronizer projects coding, verification, Astra review, repair, PR and
+production-release stages into Linear. Only a successful release containing the
+merged fix and a matching healthy live build marks it Done. Human code acceptance
+and production approval remain in GitHub. See the
+[operating contract](docs/automatic-feedback-linear-statuses.md). Generic projects
+retain approval-based intake unless they explicitly select `linear_intake_mode = "feedback"`.

@@ -27,6 +27,8 @@ def invoke():
         if not linear:
             raise SystemExit("Save the Linear read key with save_credential.py linear-read first")
         os.environ["DISPATCHER_LINEAR_API_KEY"] = linear
+        if not read_secret(state / "secrets" / "linear-status-api-key"):
+            raise SystemExit("Save the Linear status key before enabling automatic work")
         if not read_secret(state / "secrets" / "github-publisher-token"):
             raise SystemExit(
                 "Save the repo-scoped GitHub publisher token before enabling automatic work"

@@ -22,6 +22,11 @@ def install():
             {"StartInterval": 300},
         ),
     }
+    if read_secret(state / "secrets/linear-status-api-key"):
+        services["linear-sync"] = (
+            [str(INTEGRATION / "sync.py"), "--watch"],
+            {"KeepAlive": True, "ThrottleInterval": 60},
+        )
     if read_secret(state / "secrets/github-publisher-token"):
         services["worker"] = (
             [str(INTEGRATION / "worker.py"), "work", "--watch"],

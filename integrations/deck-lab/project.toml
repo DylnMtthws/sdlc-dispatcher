@@ -24,10 +24,13 @@ protected_paths = [
   "src/sabermetrics/ui/static/*auth*",
   "src/sabermetrics/ui/static/*admin*",
 ]
-automatic_intake = false
+automatic_intake = true
+linear_intake_mode = "feedback"
+required_labels = ["user-feedback"]
+production_health_url = "https://dylnmtthws-decklab.fly.dev/healthz"
 linear_team_id = "3ae1d242-a6ec-40e1-8c54-e47428d91ae0"
 linear_project_id = "a250d8f0-f9bf-4bfb-a51f-eb0222b10de3"
-max_daily_runs = 3
+max_daily_runs = 0
 max_attempts = 2
 timeout_seconds = 1800
 memory_mb = 4096
@@ -44,10 +47,21 @@ review_timeout_seconds = 900
 automatic_publication = true
 publish_command = ["/Users/dylan/Projects/sdlc-dispatcher/.venv/bin/python", "/Users/dylan/Projects/sdlc-dispatcher/integrations/deck-lab/publish.py"]
 
+[linear_statuses]
+queued = "8f881626-89c3-4358-bc63-c50ff6a427ef"
+coding = "8ff076cb-84b8-4fd2-acdc-44238d7655cf"
+testing = "764711d6-182b-495d-863e-ad6f88c3753e"
+ai_review = "e4288510-dc10-4d72-949e-c258bfaaea0b"
+repairing = "ad25701b-5739-474c-ae72-4ee20b88419e"
+awaiting_approval = "7f77a955-9b60-4a68-b8be-b80abb55e929"
+ready_for_release = "919d1315-0797-419b-9fd8-3d9a9582a381"
+deploying = "b53c5df9-78a1-4fad-8740-8bf4dedb2497"
+blocked = "a9ad849b-938a-4a64-bfff-e929b6ec5ca3"
+done = "c2e2e2cb-d253-438d-95f8-f4bddd63b705"
+cancelled = "675ef981-2c13-4810-af5f-36a53e6318cb"
+duplicate = "e8e5b152-4fd2-438c-82cf-c9216e96b8cc"
+
 [environment]
 SABER_SKIP_DOTENV = "1"
 SABER_RESEARCH_SYNC = "0"
 ANTHROPIC_API_KEY = "dummy-key-not-used-by-tests"
-
-# Add Linear routing IDs as top-level values ABOVE [environment].
-# Use IDs resolved by Deck Lab's existing setup helper; no credentials in TOML.

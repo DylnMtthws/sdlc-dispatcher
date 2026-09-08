@@ -34,6 +34,42 @@ def eligible(data: dict, project: Project) -> bool:
     )
 
 
+def terminal(data, project):
+    state = data.get("state") or {}
+    return state.get("type") in {"completed", "canceled", "duplicate"} or _id(data, "state") in {
+        project.linear_statuses.get(key) for key in ("done", "cancelled", "duplicate")
+    } - {None}
+
+
+def ingest_feedback(store, project, data, *, delivery=None, digest="", auto_ready=False):
+    if not eligible(data, project) or terminal(data, project):
+        store.withdraw(project.id, data.get("id", ""), terminal=terminal(data, project))
+        state = data.get("state") or {}
+        if state.get("type") in {"canceled", "duplicate"} or _id(data, "state") in {
+            project.linear_statuses.get("cancelled"),
+            project.linear_statuses.get("duplicate"),
+        } - {None}:
+            with store.transaction() as db:
+                row = db.execute(
+                    "SELECT id FROM jobs WHERE project=? AND source='linear' AND external_id=? AND status='published'",
+                    (project.id, data.get("id", "")),
+                ).fetchone()
+                if row:
+                    db.execute("UPDATE jobs SET cancel=1 WHERE id=?", (row["id"],))
+                    store._stage(db, row["id"], "cancelled")
+        return "ignored"
+    return store.ingest(
+        project,
+        "linear",
+        data["id"],
+        {"title": data["title"], "description": data.get("description") or ""},
+        delivery,
+        digest,
+        auto_ready=auto_ready
+        or (project.automatic_intake and project.linear_intake_mode == "feedback"),
+    )
+
+
 def receive(
     store: Store,
     project: Project,
@@ -73,6 +109,7 @@ def receive(
             return "ignored"
         if (
             event.get("action") == "update"
+            and project.linear_intake_mode == "approval"
             and "stateId" in event.get("updatedFrom", {})
             and project.linear_ready_state_id
             and _id(data, "state") != project.linear_ready_state_id
@@ -84,13 +121,12 @@ def receive(
             and _id(data, "state") == project.linear_ready_state_id
             and (event.get("actor") or {}).get("id") in project.linear_actor_ids
         )
-        return store.ingest(
+        return ingest_feedback(
+            store,
             project,
-            "linear",
-            data["id"],
-            {"title": data["title"], "description": data.get("description") or ""},
-            delivery,
-            hashlib.sha256(raw).hexdigest(),
+            data,
+            delivery=delivery,
+            digest=hashlib.sha256(raw).hexdigest(),
             auto_ready=auto,
         )
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
@@ -108,7 +144,7 @@ def confirm_current(job: dict, project: Project):
         "POST",
         {
             "query": """query DispatcherIssue($id: String!) {
-            issue(id: $id) { id title description state { id } team { id }
+            issue(id: $id) { id title description state { id type } team { id }
                 project { id } labels { nodes { name } } }
         }""",
             "variables": {"id": job["external_id"]},
@@ -120,11 +156,17 @@ def confirm_current(job: dict, project: Project):
     data = (result.get("data") or {}).get("issue")
     if not isinstance(data, dict) or not eligible(data, project):
         raise DispatchError("Issue was removed or no longer matches project eligibility")
+    if terminal(data, project):
+        raise DispatchError("Linear issue was closed or canceled")
     report = {"title": data["title"], "description": data.get("description") or ""}
     revision = hashlib.sha256(json.dumps(report, sort_keys=True).encode()).hexdigest()
     if revision != job["revision"]:
         raise DispatchError(
             "Issue changed since approval; ingest its current content and approve again"
         )
-    if project.linear_ready_state_id and _id(data, "state") != project.linear_ready_state_id:
+    if (
+        project.linear_intake_mode == "approval"
+        and project.linear_ready_state_id
+        and _id(data, "state") != project.linear_ready_state_id
+    ):
         raise DispatchError("Linear issue is no longer in the configured ready state")

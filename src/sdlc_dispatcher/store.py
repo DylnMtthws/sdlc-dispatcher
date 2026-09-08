@@ -49,6 +49,15 @@ class Store:
                     job TEXT NOT NULL, artifact_digest TEXT NOT NULL,
                     receipt TEXT NOT NULL, PRIMARY KEY(job,artifact_digest)
                 );
+                CREATE TABLE IF NOT EXISTS pipeline (
+                    job TEXT PRIMARY KEY, stage TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+                    synced_version INTEGER NOT NULL DEFAULT 0, synced_state TEXT NOT NULL DEFAULT '',
+                    updated REAL NOT NULL, next_retry REAL NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '', release_sha TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS pending_requeues (
+                    job TEXT PRIMARY KEY, policy TEXT NOT NULL, revision TEXT NOT NULL
+                );
             """)
         path.chmod(0o600)
 
@@ -76,6 +85,46 @@ class Store:
             "INSERT INTO audit(job,action,at,detail) VALUES(?,?,?,?)",
             (job, action, time.time(), detail),
         )
+        stage = {
+            "approved": "queued",
+            "automatic_approval": "queued",
+            "started": "testing",
+            "coding_started": "coding",
+            "verification_started": "testing",
+            "review_started": "ai_review",
+            "repair_started": "repairing",
+            "ready": "awaiting_approval",
+            "published": "awaiting_approval",
+            "failed": "blocked",
+            "blocked": "blocked",
+            "cancelled": "cancelled",
+            "publication_needs_attention": "blocked",
+            "publication_preflight_blocked": "blocked",
+            "policy_changed_or_limit_reached": "blocked",
+        }.get(action)
+        if action == "ingested":
+            stage = "queued" if detail == "queued" else "blocked"
+        if job and stage:
+            Store._stage(db, job, stage)
+
+    @staticmethod
+    def _stage(db, job, stage):
+        db.execute(
+            """INSERT INTO pipeline(job,stage,updated) VALUES(?,?,?)
+            ON CONFLICT(job) DO UPDATE SET stage=excluded.stage,version=pipeline.version+1,
+            updated=excluded.updated,next_retry=0,last_error=''
+            WHERE pipeline.stage != excluded.stage""",
+            (job, stage, time.time()),
+        )
+
+    def set_stage(self, job, stage):
+        with self.transaction() as db:
+            self._stage(db, job, stage)
+
+    def stage(self, job):
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM pipeline WHERE job=?", (job,)).fetchone()
+        return dict(row) if row else None
 
     def ingest(
         self,
@@ -130,7 +179,14 @@ class Store:
             policy = project.fingerprint if status == "queued" else ""
             if row:
                 if row["revision"] == revision:
+                    if status == "queued" and row["status"] == "published" and row["cancel"]:
+                        db.execute("UPDATE jobs SET cancel=0 WHERE id=?", (row["id"],))
+                        self.audit(db, row["id"], "tracking_resumed")
                     if status == "queued" and row["status"] == "needs_review":
+                        if row["attempts"] >= project.max_attempts:
+                            db.execute("UPDATE jobs SET status='blocked' WHERE id=?", (row["id"],))
+                            self.audit(db, row["id"], "blocked", "Attempt limit reached")
+                            return row["id"]
                         db.execute(
                             "UPDATE jobs SET status=?,policy=?,updated=? WHERE id=?",
                             (status, policy, now, row["id"]),
@@ -142,19 +198,29 @@ class Store:
                     self.audit(db, row["id"], "report_changed_after_publication")
                     return row["id"]
                 active = row["status"] in {"running", "verifying"}
+                automatic = status == "queued" and project.linear_intake_mode == "feedback"
                 db.execute(
-                    """UPDATE jobs SET report=?,revision=?,status=?,policy='',updated=?,
-                              cancel=?,artifact=NULL,artifact_digest=NULL WHERE id=?""",
+                    """UPDATE jobs SET report=?,revision=?,status=?,policy=?,updated=?,
+                              cancel=?,attempts=?,artifact=NULL,artifact_digest=NULL WHERE id=?""",
                     (
                         content,
                         revision,
-                        row["status"] if active else "needs_review",
+                        row["status"] if active else status if automatic else "needs_review",
+                        policy if automatic else "",
                         now,
                         int(active),
+                        row["attempts"] if active or not automatic else 0,
                         row["id"],
                     ),
                 )
                 self.audit(db, row["id"], "report_changed_approval_revoked")
+                if automatic and active:
+                    db.execute(
+                        "INSERT OR REPLACE INTO pending_requeues VALUES(?,?,?)",
+                        (row["id"], policy, revision),
+                    )
+                elif automatic:
+                    self.audit(db, row["id"], "automatic_approval")
                 return row["id"]
             job = uuid.uuid4().hex
             db.execute(
@@ -222,26 +288,29 @@ class Store:
             )
             if enabled:
                 db.execute("UPDATE jobs SET cancel=1 WHERE status IN ('running','verifying')")
+                db.execute("DELETE FROM pending_requeues")
             self.audit(db, None, "paused" if enabled else "resumed")
 
-    def withdraw(self, project: str, external_id: str):
+    def withdraw(self, project: str, external_id: str, *, terminal=False):
         with self.transaction() as db:
             row = db.execute(
                 "SELECT id,status FROM jobs WHERE project=? AND source='linear' AND external_id=?",
                 (project, external_id),
             ).fetchone()
             if row and row["status"] not in {"publishing", "published"}:
+                db.execute("DELETE FROM pending_requeues WHERE job=?", (row["id"],))
                 active = row["status"] in {"running", "verifying"}
                 db.execute(
                     "UPDATE jobs SET cancel=?,status=?,policy='',updated=? WHERE id=?",
                     (
                         int(active),
-                        row["status"] if active else "needs_review",
+                        row["status"] if active else "cancelled" if terminal else "needs_review",
                         time.time(),
                         row["id"],
                     ),
                 )
                 self.audit(db, row["id"], "eligibility_withdrawn")
+                self._stage(db, row["id"], "cancelled" if terminal else "blocked")
 
     def claim(self, project: Project) -> dict | None:
         now = time.time()
@@ -258,7 +327,7 @@ class Store:
                 "SELECT COUNT(*) FROM runs WHERE project=? AND started>=?",
                 (project.id, now - 86400),
             ).fetchone()[0]
-            if count >= project.max_daily_runs:
+            if project.max_daily_runs and count >= project.max_daily_runs:
                 return None
             row = db.execute(
                 "SELECT * FROM jobs WHERE project=? AND status='queued' ORDER BY created LIMIT 1",
@@ -291,11 +360,33 @@ class Store:
             if not row or row[0] in {"publishing", "published"}:
                 raise DispatchError("Cannot cancel an unknown or publishing/published job")
             status = row[0] if row[0] in {"running", "verifying"} else "cancelled"
+            db.execute("DELETE FROM pending_requeues WHERE job=?", (job,))
             db.execute(
                 "UPDATE jobs SET cancel=1,status=?,updated=? WHERE id=?",
                 (status, time.time(), job),
             )
             self.audit(db, job, "cancellation_requested")
+
+    def resume_revision(self, job, project):
+        """Only the worker calls this after its old candidate resources are removed."""
+        with self.transaction() as db:
+            pending = db.execute("SELECT * FROM pending_requeues WHERE job=?", (job,)).fetchone()
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
+            if not pending or not row or row["status"] != "cancelled":
+                return
+            paused = db.execute("SELECT value FROM settings WHERE key='paused'").fetchone()
+            if (
+                pending["policy"] != project.fingerprint
+                or pending["revision"] != row["revision"]
+                or (paused and paused[0] == "1")
+            ):
+                return
+            db.execute(
+                "UPDATE jobs SET status='queued',policy=?,attempts=0,cancel=0,updated=? WHERE id=?",
+                (project.fingerprint, time.time(), job),
+            )
+            db.execute("DELETE FROM pending_requeues WHERE job=?", (job,))
+            self.audit(db, job, "automatic_approval")
 
     def finish(self, job: str, status: str, detail="", **fields):
         if status not in {
@@ -321,6 +412,13 @@ class Store:
                 (status, time.time(), *fields.values(), job),
             )
             self.audit(db, job, status, detail)
+            if (
+                status == "cancelled"
+                and db.execute("SELECT 1 FROM pending_requeues WHERE job=?", (job,)).fetchone()
+            ):
+                # A changed report is waiting for cleanup, not a canceled issue.
+                # Never send a Canceled status that would cancel the new revision.
+                self._stage(db, job, "queued")
 
     def events(self, job: str):
         with self.connect() as db:

@@ -1,6 +1,7 @@
 # GitHub approval, independent review, and release specification
 
-Requested September 8, 2026. This specification extends the isolated Astra
+Requested September 8, 2026. Intake and Linear status behavior are subsequently
+updated by [the automatic-feedback contract](automatic-feedback-linear-statuses.md). This specification extends the isolated Astra
 reviewer into the worker/publication path and defines Deck Lab's human release UI.
 
 ## User experience

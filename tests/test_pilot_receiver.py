@@ -1,9 +1,17 @@
+import hashlib
+import hmac
 import importlib.util
+import io
+import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+from helpers import project
 
 spec = importlib.util.spec_from_file_location(
     "pilot_receiver",
@@ -68,3 +76,60 @@ class PilotReceiverTests(unittest.TestCase):
                 run.call_args.args[0],
                 ["/bin/launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{receiver.LABEL}"],
             )
+
+    def test_receiver_accepts_signed_feedback_with_automatic_intake(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registration = project(
+                root,
+                id="deck-lab",
+                automatic_intake=True,
+                linear_intake_mode="feedback",
+                linear_team_id="team",
+                linear_project_id="project",
+                required_labels=["user-feedback"],
+            )
+            server = Mock()
+            with (
+                patch.dict("sys.modules", {"waitress": SimpleNamespace(serve=server)}),
+                patch.object(receiver, "STATE", root),
+                patch.object(receiver, "read_secret", return_value="fixture-only"),
+                patch.object(receiver, "load_project", return_value=registration),
+                patch.dict("os.environ", {}),
+            ):
+                receiver.serve()
+                app = server.call_args.args[0]
+                raw = json.dumps(
+                    {
+                        "webhookTimestamp": time.time() * 1000,
+                        "type": "Issue",
+                        "action": "create",
+                        "data": {
+                            "id": "fixture-issue",
+                            "title": "Fixture feedback",
+                            "description": "Fix",
+                            "teamId": "team",
+                            "projectId": "project",
+                            "stateId": "triage",
+                            "labels": [{"name": "user-feedback"}],
+                        },
+                    }
+                ).encode()
+                statuses = []
+                response = app(
+                    {
+                        "REQUEST_METHOD": "POST",
+                        "PATH_INFO": "/webhooks/linear/deck-lab",
+                        "CONTENT_LENGTH": str(len(raw)),
+                        "wsgi.input": io.BytesIO(raw),
+                        "HTTP_LINEAR_DELIVERY": "fixture-delivery",
+                        "HTTP_LINEAR_SIGNATURE": hmac.new(
+                            b"fixture-only", raw, hashlib.sha256
+                        ).hexdigest(),
+                    },
+                    lambda status, headers: statuses.append(status),
+                )
+                self.assertEqual(statuses, ["200 OK"])
+                self.assertEqual(json.loads(b"".join(response)), {"ok": True})
+                self.assertEqual(receiver.Store(root / "queue.db").jobs()[0]["status"], "queued")
+            self.assertEqual(server.call_args.kwargs["host"], "127.0.0.1")

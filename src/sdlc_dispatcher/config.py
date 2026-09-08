@@ -34,6 +34,9 @@ class Project:
     linear_actor_ids: list[str] = field(default_factory=list)
     required_labels: list[str] = field(default_factory=lambda: ["user-feedback", "bug"])
     automatic_intake: bool = False
+    linear_intake_mode: str = "approval"
+    linear_statuses: dict[str, str] = field(default_factory=dict)
+    production_health_url: str = ""
     max_daily_runs: int = 3
     max_attempts: int = 2
     timeout_seconds: int = 900
@@ -55,6 +58,26 @@ class Project:
     publish_command: list[str] = field(default_factory=list)
 
     def __post_init__(self):
+        if self.linear_intake_mode not in {"approval", "feedback"}:
+            raise DispatchError("Linear intake mode must be approval or feedback")
+        if not isinstance(self.linear_statuses, dict) or any(
+            not isinstance(k, str) or not isinstance(v, str) or not v
+            for k, v in self.linear_statuses.items()
+        ):
+            raise DispatchError("Linear status mapping must contain nonempty state IDs")
+        if self.production_health_url:
+            from urllib.parse import urlsplit
+
+            url = urlsplit(self.production_health_url)
+            if (
+                url.scheme != "https"
+                or not url.hostname
+                or url.username
+                or url.password
+                or url.query
+                or url.fragment
+            ):
+                raise DispatchError("Production health URL must be a fixed HTTPS endpoint")
         if (
             type(self.automatic_publication) is not bool
             or not isinstance(self.publish_command, list)
@@ -177,7 +200,6 @@ class Project:
         ):
             raise DispatchError("GitHub repository must be owner/name")
         for name in (
-            "max_daily_runs",
             "max_attempts",
             "timeout_seconds",
             "max_changed_files",
@@ -190,6 +212,12 @@ class Project:
                 raise DispatchError(f"{name} must be a positive integer")
         if type(self.automatic_intake) is not bool:
             raise DispatchError("automatic_intake must be a boolean")
+        if type(self.max_daily_runs) is not int or self.max_daily_runs < 0:
+            raise DispatchError("max_daily_runs must be nonnegative; zero disables the daily quota")
+        if self.automatic_intake and self.linear_intake_mode == "feedback":
+            if not self.linear_team_id or not self.linear_project_id or not self.required_labels:
+                raise DispatchError("Automatic feedback intake requires team, project and labels")
+            return
         if self.automatic_intake and not all(
             (
                 self.linear_team_id,

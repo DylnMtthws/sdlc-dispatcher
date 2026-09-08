@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -131,3 +132,31 @@ class LinearTests(unittest.TestCase):
             )
         self.assertEqual(status, ["200 OK"])
         self.assertEqual(json.loads(b"".join(response)), {"ok": True})
+
+    def test_feedback_mode_signed_create_needs_no_approval(self):
+        self.project = replace(
+            self.project,
+            linear_intake_mode="feedback",
+            linear_ready_state_id="",
+            linear_actor_ids=[],
+        )
+        self.event["action"] = "create"
+        self.event["actor"] = {"id": "reporter"}
+        self.event["data"]["stateId"] = "triage"
+        self.assertEqual(self.store.get(self.send())["status"], "queued")
+
+    def test_feedback_mode_status_echo_does_not_cancel_running_job(self):
+        self.project = replace(self.project, linear_intake_mode="feedback")
+        job = self.send()
+        self.store.claim(self.project)
+        self.event["data"]["stateId"] = "ai-review"
+        self.event["actor"] = {"id": "status-writer"}
+        self.send(delivery="status-echo")
+        self.assertFalse(self.store.cancelled(job))
+
+    def test_feedback_terminal_state_id_without_type_is_excluded(self):
+        self.project = replace(
+            self.project, linear_intake_mode="feedback", linear_statuses={"done": "done"}
+        )
+        self.event["data"]["stateId"] = "done"
+        self.assertEqual(self.send(), "ignored")

@@ -182,6 +182,8 @@ def work_once(
             if project.review_required:
                 from .review_gate import review_candidate
 
+                with store.transaction() as db:
+                    store.audit(db, job["id"], "review_started")
                 review = (reviewer or review_candidate)(
                     store, project, job, path, digest, round_folder
                 )
@@ -248,6 +250,7 @@ def work_once(
                 path = round_folder / name
                 if path.exists():
                     shutil.rmtree(path)
+        store.resume_revision(job["id"], project)
     return job["id"]
 
 
@@ -270,6 +273,8 @@ def _candidate_round(
     outcomes = []
     scratch = folder / "workspace"
     materialize(scratch, seed)
+    with store.transaction() as db:
+        store.audit(db, job["id"], "repair_started" if repair_feedback else "coding_started")
     code = runner.run(
         project=project,
         image=image,
@@ -293,6 +298,8 @@ def _candidate_round(
     if not new_tests:
         raise DispatchError("A new regression test is required for an automated repair")
     store.finish(job["id"], "verifying")
+    with store.transaction() as db:
+        store.audit(db, job["id"], "verification_started")
     if cancelled():
         raise DispatchError("Worker cancelled")
     regression = folder / "regression"

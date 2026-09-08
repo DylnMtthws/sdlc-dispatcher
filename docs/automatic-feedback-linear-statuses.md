@@ -1,0 +1,89 @@
+# Automatic feedback and Linear pipeline states
+
+Effective September 8, 2026. Feedback from Deck Lab's registered Linear team/project
+with the `user-feedback` label queues automatically, including bugs, suggestions
+and UX feedback. It does not require a ready-state transition or human intake
+approval. Other projects/labels and completed/canceled/duplicate issues are excluded.
+Existing eligible open feedback is backfilled; previously blocked attempts retain
+their limits and become visible as Blocked rather than being retried indefinitely.
+
+The former three-initial-runs daily quota is disabled (`max_daily_runs = 0`). Global
+coding concurrency stays one, each attempt has the existing 30-minute deadline,
+and the independent Astra gate allows at most two repair rounds. Code acceptance
+and production deployment still require the owner's GitHub decisions.
+
+| Event | Linear status |
+| --- | --- |
+| Eligible feedback accepted | Todo |
+| Baseline or candidate checks | Verifying |
+| Cursor coding | In Progress |
+| Independent browser evidence and Astra review | AI Review |
+| Bounded Cursor repair | Repairing |
+| Verified candidate / draft PR awaiting human acceptance | In Review |
+| PR merged, not yet verified live | Ready for Release |
+| Production deploy job executing after environment approval | Deploying |
+| Successful production workflow and healthy live build containing the merge | Done |
+| Failed checks/review, exhausted bounds, failed publication/release | Blocked |
+| Issue canceled/duplicated or PR closed without merge | Canceled (manual Duplicate is preserved) |
+
+The local pipeline projection is stored durably in SQLite. Stage writes have a
+monotonically increasing version and an acknowledged version. The controller reads
+Linear before changing only `stateId`; it never rewrites report text or adds comments.
+A lost response retries by re-reading and acknowledging an already matching state.
+Newer stage versions supersede stale writes. Provider failures retain retry state
+and cannot produce a false completion. Status delivery does not pause coding or
+release workflows; a provider outage can delay the displayed state.
+
+The synchronizer processes stage changes every ten seconds, observes GitHub every
+thirty seconds, and backfills missed feedback every five minutes. Very short stages
+may be coalesced. Timestamps and all original events remain in the local audit log.
+No unauthenticated GitHub webhook or public administrative endpoint is introduced.
+
+For completion, match the fixed production health build SHA to a successful main
+`Deploy production` run whose `deploy` job succeeded. Then verify the PR's actual
+merge commit is that release or its ancestor. A green CI/preparation job, merge,
+stale live version, unrelated release, failed deployment or missing health evidence
+cannot mark a fix Done. Previously established live-release proofs are cached so
+old releases remain verifiable after they leave the recent-runs window. A rollback
+that no longer contains the merge removes the automatic Done state on reconciliation.
+
+Own status-update webhooks do not start another coding attempt. Content edits to
+an inactive unpublished report start a new revision automatically; edits during a
+run cancel the old revision and queue the new one only after cleanup. A manual
+cancel/pause prevents that requeue. Content changes after publication require a new
+feedback issue rather than modifying an already reviewed PR's scope. Canceling or
+duplicating a published issue suspends tracking; reopening the unchanged issue
+resumes it. Removing project/label eligibility stops queued/running work.
+
+## Credentials and operations
+
+The dedicated `linear-status-api-key` has Read/Write access to the feedback team.
+It is loaded only by the trusted status synchronizer. Cursor and Astra receive
+neither it nor the read-only Linear/GitHub publisher credentials. The synchronizer
+uses the existing publisher key for read-only GitHub requests and never merges or
+deploys. Initial state setup adds missing team states without renaming existing ones.
+
+```bash
+.venv/bin/python integrations/deck-lab/save_credential.py linear-status
+.venv/bin/python integrations/deck-lab/sync.py --setup
+# Register the returned state IDs in project.toml before activation.
+.venv/bin/python integrations/deck-lab/sync.py --backfill
+.venv/bin/python integrations/deck-lab/services.py
+```
+
+The login service is `com.sdlc-dispatcher.deck-lab-linear-sync`. Logs are private
+`.dispatcher/linear-sync.*.log` files. Inspect `pipeline.last_error` and `next_retry`
+in the queue database for per-issue delivery failures. The Mac mini, login session,
+Docker and Tailscale must remain available for autonomous coding and previews.
+
+Verification covers automatic eligible intake, terminal/foreign refusal, webhook
+echoes, edits during execution, cancel precedence, unlimited daily intake with
+bounded concurrency/attempts, version races, lost-write retry and exact-release
+completion. A real workflow state creation and actual issue status writes validate
+the credentials; historical production evidence validates the read-only observer.
+
+Activation verification: 112 tests passed with Docker boundary tests enabled.
+The team state mapping and real issue updates were verified. DYL-11 began coding
+automatically; DYL-10 and DYL-9 queued without approval, while the two earlier
+blocked pilot jobs remained Blocked. Both local and public receiver health returned
+200, and the release observer verified the deployed build using GitHub/live evidence.

@@ -105,8 +105,6 @@ def serve():
     secret = read_secret(SECRET)
     os.environ["DISPATCHER_LINEAR_SECRET_DECK_LAB"] = secret
     project = load_project(Path(__file__).with_name("project.toml"))
-    if project.automatic_intake:
-        raise RuntimeError("This pilot receiver requires manual approval")
     app = application(Store(STATE / "queue.db"), {project.id: project})
     waitress_serve(
         RateLimit(app),
