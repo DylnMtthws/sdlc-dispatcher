@@ -55,6 +55,10 @@ class Store:
                     updated REAL NOT NULL, next_retry REAL NOT NULL DEFAULT 0,
                     last_error TEXT NOT NULL DEFAULT '', release_sha TEXT NOT NULL DEFAULT ''
                 );
+                CREATE TABLE IF NOT EXISTS retry_grants (
+                    job TEXT PRIMARY KEY, revision TEXT NOT NULL, policy TEXT NOT NULL,
+                    ceiling INTEGER NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS pending_requeues (
                     job TEXT PRIMARY KEY, policy TEXT NOT NULL, revision TEXT NOT NULL
                 );
@@ -87,6 +91,7 @@ class Store:
         )
         stage = {
             "approved": "queued",
+            "retry_authorized": "queued",
             "automatic_approval": "queued",
             "started": "testing",
             "coding_started": "coding",
@@ -183,7 +188,7 @@ class Store:
                         db.execute("UPDATE jobs SET cancel=0 WHERE id=?", (row["id"],))
                         self.audit(db, row["id"], "tracking_resumed")
                     if status == "queued" and row["status"] == "needs_review":
-                        if row["attempts"] >= project.max_attempts:
+                        if row["attempts"] >= self._attempt_limit(db, row, project):
                             db.execute("UPDATE jobs SET status='blocked' WHERE id=?", (row["id"],))
                             self.audit(db, row["id"], "blocked", "Attempt limit reached")
                             return row["id"]
@@ -258,6 +263,50 @@ class Store:
                 )
             ]
 
+    @staticmethod
+    def _attempt_limit(db, row, project):
+        grant = db.execute(
+            "SELECT ceiling FROM retry_grants WHERE job=? AND revision=? AND policy=?",
+            (row["id"], row["revision"], project.fingerprint),
+        ).fetchone()
+        return max(project.max_attempts, grant[0] if grant else 0)
+
+    def retry(self, job: str, project: Project, reason: str):
+        """Authorize one more attempt without resetting history or changing project policy."""
+        if not reason.strip() or len(reason) > 1000:
+            raise DispatchError("A concise retry reason is required")
+        with self.transaction() as db:
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
+            if (
+                not row
+                or row["project"] != project.id
+                or row["status"] not in {"blocked", "failed", "cancelled", "needs_review"}
+            ):
+                raise DispatchError("Only inactive, unpublished jobs can be retried")
+            ceiling = max(project.max_attempts, row["attempts"] + 1)
+            db.execute(
+                "INSERT OR REPLACE INTO retry_grants VALUES(?,?,?,?)",
+                (job, row["revision"], project.fingerprint, ceiling),
+            )
+            db.execute("DELETE FROM pending_requeues WHERE job=?", (job,))
+            db.execute(
+                """UPDATE jobs SET status='queued',policy=?,cancel=0,deadline=NULL,
+                artifact=NULL,artifact_digest=NULL,base_sha=NULL,updated=? WHERE id=?""",
+                (project.fingerprint, time.time(), job),
+            )
+            self.audit(
+                db,
+                job,
+                "retry_authorized",
+                json.dumps(
+                    {
+                        "reason": reason,
+                        "prior_attempts": row["attempts"],
+                        "attempt_ceiling": ceiling,
+                    }
+                ),
+            )
+
     def approve(self, job: str, project: Project):
         with self.transaction() as db:
             row = db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
@@ -267,7 +316,7 @@ class Store:
                 or row["status"] not in {"needs_review", "failed", "blocked", "ready", "cancelled"}
             ):
                 raise DispatchError("Job is not eligible for approval")
-            if row["attempts"] >= project.max_attempts:
+            if row["attempts"] >= self._attempt_limit(db, row, project):
                 raise DispatchError("Attempt limit reached; investigate before creating new work")
             db.execute(
                 "UPDATE jobs SET status='queued',policy=?,cancel=0,artifact=NULL,artifact_digest=NULL,updated=? WHERE id=?",
@@ -335,7 +384,9 @@ class Store:
             ).fetchone()
             if not row:
                 return None
-            if row["policy"] != project.fingerprint or row["attempts"] >= project.max_attempts:
+            if row["policy"] != project.fingerprint or row["attempts"] >= self._attempt_limit(
+                db, row, project
+            ):
                 db.execute(
                     "UPDATE jobs SET status='needs_review',updated=? WHERE id=?",
                     (now, row["id"]),

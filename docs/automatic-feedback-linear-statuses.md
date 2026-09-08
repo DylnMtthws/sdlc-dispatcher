@@ -87,3 +87,13 @@ The team state mapping and real issue updates were verified. DYL-11 began coding
 automatically; DYL-10 and DYL-9 queued without approval, while the two earlier
 blocked pilot jobs remained Blocked. Both local and public receiver health returned
 200, and the release observer verified the deployed build using GitHub/live evidence.
+
+### Explicit retries after a blocked run
+
+Use `sdlc-dispatcher retry --project <project.toml> <job-id> --reason "<reason>"`
+after investigating a failure. This queues the existing issue and, when its normal
+attempt budget is exhausted, authorizes one extra attempt for the current report
+and policy. Attempt numbers, artifacts, run counts, and audit history are preserved.
+The grant cannot interrupt active work, duplicate a published PR, bypass checks or
+review, or change project-wide limits. Linear returns to Todo through normal status
+synchronization. An exhausted retry needs another explicit operator decision.

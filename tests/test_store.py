@@ -114,3 +114,52 @@ class QueueTests(unittest.TestCase):
         self.store.pause()
         self.store.pause(False)
         self.assertTrue(self.store.cancelled(job))
+
+    def test_retry_preserves_history_and_grants_only_one_extra_attempt(self):
+        project = replace(self.project, max_attempts=1, max_daily_runs=0)
+        job = self.enqueue()
+        self.store.approve(job, project)
+        self.store.claim(project)
+        self.store.finish(job, "blocked", "Setup fault")
+        self.store.retry(job, project, "Owner requested retry after setup repair")
+        restarted = Store(self.root / "queue.db")
+        self.assertEqual(restarted.stage(job)["stage"], "queued")
+        self.assertEqual(restarted.claim(project)["attempts"], 2)
+        restarted.finish(job, "blocked")
+        with self.assertRaises(DispatchError):
+            restarted.approve(job, project)
+        with restarted.connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM runs").fetchone()[0], 2)
+        self.assertTrue(any(e["action"] == "retry_authorized" for e in restarted.events(job)))
+
+    def test_retry_cannot_interrupt_or_duplicate_active_work(self):
+        job = self.enqueue()
+        self.store.retry(job, self.project, "Owner requested")
+        for status in ("queued", "running", "verifying", "ready", "publishing", "published"):
+            with self.store.transaction() as db:
+                db.execute("UPDATE jobs SET status=? WHERE id=?", (status, job))
+            with self.assertRaises(DispatchError):
+                self.store.retry(job, self.project, "Owner requested")
+
+    def test_retry_grant_is_bound_to_revision_and_policy(self):
+        project = replace(self.project, max_attempts=1, max_daily_runs=0)
+        job = self.enqueue()
+        self.store.approve(job, project)
+        self.store.claim(project)
+        self.store.finish(job, "blocked")
+        self.store.retry(job, project, "Owner requested")
+        with self.store.transaction() as db:
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (job,)).fetchone()
+            self.assertEqual(self.store._attempt_limit(db, row, project), 2)
+            self.assertEqual(self.store._attempt_limit(db, row, replace(project, model="other")), 1)
+            db.execute("UPDATE jobs SET revision='different' WHERE id=?", (job,))
+        self.assertIsNone(self.store.claim(project))
+
+    def test_retry_requires_reason_and_correct_project(self):
+        job = self.enqueue()
+        for target_project, reason in (
+            (self.project, " "),
+            (replace(self.project, id="other"), "Retry"),
+        ):
+            with self.assertRaises(DispatchError):
+                self.store.retry(job, target_project, reason)

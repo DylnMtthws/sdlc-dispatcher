@@ -111,13 +111,16 @@ def main(argv=None):
         "verify-project",
         "enqueue",
         "approve",
+        "retry",
         "work",
         "publish",
     ):
         sub = commands.add_parser(name)
         sub.add_argument("--project", type=Path, required=True)
-        if name in {"approve", "publish"}:
+        if name in {"approve", "retry", "publish"}:
             sub.add_argument("job")
+        if name == "retry":
+            sub.add_argument("--reason", required=True)
         if name == "enqueue":
             sub.add_argument("--input", type=Path, required=True)
             sub.add_argument("--issue-id", required=True)
@@ -176,6 +179,8 @@ def main(argv=None):
             }
         elif args.command == "approve":
             store.approve(args.job, project)
+        elif args.command == "retry":
+            store.retry(args.job, project, args.reason)
         elif args.command == "cancel":
             store.cancel(args.job)
         elif args.command in {"pause", "resume"}:
