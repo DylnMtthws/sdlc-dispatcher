@@ -1,0 +1,4 @@
+{
+  "title": "Greeting preserves accidental surrounding spaces",
+  "description": "Reproduce: call greet(' Ada '). Expected: 'Hello, Ada'. Actual: 'Hello,  Ada '."
+}

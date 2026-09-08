@@ -1,0 +1,53 @@
+id = "deck-lab"
+repository = "../../../deck_lab"
+base_ref = "main"
+image = "deck-lab-cursor:local"
+engine = "cursor"
+model = "grok-4.6[effort=high,fast=false]"
+github_repository = "DylnMtthws/commander-deck-engine"
+checks = [
+  ["ruff", "check", "--no-cache", "src", "tests"],
+  ["black", "--check", "src", "tests"],
+  ["mypy", "--cache-dir=/tmp/mypy-cache", "src"],
+  ["pytest", "-q", "-p", "no:cacheprovider"],
+]
+regression_checks = [["pytest", "-q", "-p", "no:cacheprovider"]]
+allowed_paths = ["src/sabermetrics/ui/static/**", "src/sabermetrics/ui/templates/**", "tests/test_*.py"]
+protected_paths = [
+  "src/sabermetrics/ui/templates/auth/**",
+  "src/sabermetrics/ui/templates/admin/**",
+  "src/sabermetrics/ui/templates/admin_*.html",
+  "src/sabermetrics/ui/templates/deck_lab/admin*.html",
+  "src/sabermetrics/ui/templates/*password*.html",
+  "src/sabermetrics/ui/templates/*login*.html",
+  "src/sabermetrics/ui/static/*password*",
+  "src/sabermetrics/ui/static/*auth*",
+  "src/sabermetrics/ui/static/*admin*",
+]
+automatic_intake = false
+linear_team_id = "3ae1d242-a6ec-40e1-8c54-e47428d91ae0"
+linear_project_id = "a250d8f0-f9bf-4bfb-a51f-eb0222b10de3"
+max_daily_runs = 3
+max_attempts = 2
+timeout_seconds = 1800
+memory_mb = 4096
+max_changed_files = 8
+max_patch_bytes = 150000
+review_required = true
+review_policy = "reviewer-policy.md"
+review_image = "deck-lab-agent:local"
+review_auth_home = "../../.dispatcher/secrets/reviewer-codex"
+review_context_paths = ["src/sabermetrics/ui/templates/deck_lab/builder.html", "src/sabermetrics/ui/templates/deck_lab/base.html"]
+review_evidence_command = ["/Users/dylan/Projects/sdlc-dispatcher/.venv/bin/python", "/Users/dylan/Projects/sdlc-dispatcher/integrations/deck-lab/evidence.py"]
+max_review_repairs = 2
+review_timeout_seconds = 900
+automatic_publication = true
+publish_command = ["/Users/dylan/Projects/sdlc-dispatcher/.venv/bin/python", "/Users/dylan/Projects/sdlc-dispatcher/integrations/deck-lab/publish.py"]
+
+[environment]
+SABER_SKIP_DOTENV = "1"
+SABER_RESEARCH_SYNC = "0"
+ANTHROPIC_API_KEY = "dummy-key-not-used-by-tests"
+
+# Add Linear routing IDs as top-level values ABOVE [environment].
+# Use IDs resolved by Deck Lab's existing setup helper; no credentials in TOML.

@@ -1,0 +1,23 @@
+id = "my-app"
+repository = "../../my-app"
+base_ref = "main"
+image = "my-app-agent:local"
+github_repository = "your-account/your-app"
+checks = [["python", "-m", "unittest", "discover", "-v"]]
+allowed_paths = ["src/**", "tests/test_*.py"]
+protected_paths = ["src/auth/**", "src/migrations/**"]
+automatic_intake = false
+max_daily_runs = 3
+max_attempts = 2
+timeout_seconds = 900
+max_changed_files = 12
+max_patch_bytes = 200000
+
+# Set real IDs after local validation. Prose cannot supply routing or approval.
+# linear_team_id = "..."
+# linear_project_id = "..."
+# linear_ready_state_id = "..."
+# linear_actor_ids = ["trusted-human-user-id"]
+# required_labels = ["user-feedback", "bug"]
+# model = "an-explicit-model-id-available-to-your-account"
+# engine = "cursor" # defaults to codex; Cursor requires an explicit model above
