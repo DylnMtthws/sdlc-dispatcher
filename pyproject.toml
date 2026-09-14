@@ -19,7 +19,7 @@ dependencies = []
 
 [project.optional-dependencies]
 server = ["waitress>=3,<4"]
-dev = ["black==26.5.1", "ruff==0.16.4", "coverage>=7,<8", "build>=1,<2"]
+dev = ["black==26.5.1", "ruff==0.16.7", "coverage>=7,<8", "build>=1,<2"]
 
 [project.urls]
 Repository = "https://github.com/DylnMtthws/sdlc-dispatcher"
