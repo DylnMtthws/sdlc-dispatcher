@@ -104,6 +104,18 @@ def receive(
         data = event["data"]
         if not isinstance(data, dict):
             raise DispatchError("Malformed Linear issue")
+        from .release_store import transition
+
+        release = transition(
+            store,
+            project,
+            event,
+            delivery,
+            hashlib.sha256(raw).hexdigest(),
+            now if now is not None else time.time(),
+        )
+        if release and release != "release_ignored":
+            return release
         if event.get("action") == "remove" or not eligible(data, project):
             store.withdraw(project.id, data.get("id", ""))
             return "ignored"

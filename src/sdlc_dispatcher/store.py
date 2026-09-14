@@ -62,6 +62,25 @@ class Store:
                 CREATE TABLE IF NOT EXISTS pending_requeues (
                     job TEXT PRIMARY KEY, policy TEXT NOT NULL, revision TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS blocked_comments (
+                    job TEXT NOT NULL, version INTEGER NOT NULL, comment_id TEXT NOT NULL,
+                    body TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(job,version)
+                );
+                CREATE TABLE IF NOT EXISTS publication_attempts (
+                    job TEXT NOT NULL, artifact_digest TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0, next_retry REAL NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '', PRIMARY KEY(job,artifact_digest)
+                );
+                CREATE TABLE IF NOT EXISTS agent_activity (
+                    job TEXT PRIMARY KEY, revision TEXT NOT NULL, attempt INTEGER NOT NULL,
+                    phase TEXT NOT NULL, started REAL NOT NULL, heartbeat REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS activity_comments (
+                    job TEXT PRIMARY KEY, comment_id TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+                    signature TEXT NOT NULL DEFAULT '', sent REAL NOT NULL DEFAULT 0,
+                    next_retry REAL NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT ''
+                );
             """)
         path.chmod(0o600)
 
@@ -368,9 +387,7 @@ class Store:
             if paused and paused[0] == "1":
                 return None
             # Global concurrency=1 is deliberate for v0. A stale run fails closed until recovery.
-            if db.execute(
-                "SELECT 1 FROM jobs WHERE status IN ('running','verifying','publishing')"
-            ).fetchone():
+            if db.execute("SELECT 1 FROM jobs WHERE status IN ('running','verifying')").fetchone():
                 return None
             count = db.execute(
                 "SELECT COUNT(*) FROM runs WHERE project=? AND started>=?",
@@ -391,7 +408,13 @@ class Store:
                     "UPDATE jobs SET status='needs_review',updated=? WHERE id=?",
                     (now, row["id"]),
                 )
-                self.audit(db, row["id"], "policy_changed_or_limit_reached")
+                reason = (
+                    "Job approval uses a different project configuration than the worker. "
+                    "Refresh the intake and worker services, then reapprove this job."
+                    if row["policy"] != project.fingerprint
+                    else "Job attempt limit reached; an explicit retry is required."
+                )
+                self.audit(db, row["id"], "policy_changed_or_limit_reached", reason)
                 return None
             db.execute(
                 "UPDATE jobs SET status='running',attempts=attempts+1,deadline=?,updated=? WHERE id=?",

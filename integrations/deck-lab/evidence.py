@@ -11,6 +11,7 @@ import socket
 import subprocess
 import time
 from dataclasses import replace
+from difflib import unified_diff
 from pathlib import Path
 
 from sdlc_dispatcher.config import DispatchError, load_project
@@ -22,22 +23,60 @@ INTEGRATION = Path(__file__).resolve().parent
 TTL = 8 * 3600
 
 
-def command(args, *, timeout=45):
+def command(args, *, timeout=45, log=None):
     try:
         return subprocess.run(args, check=True, capture_output=True, timeout=timeout).stdout
     except (OSError, subprocess.SubprocessError) as exc:
+        if log:
+            log.write_bytes(
+                ((getattr(exc, "stdout", None) or b"") + (getattr(exc, "stderr", None) or b""))[
+                    -100_000:
+                ]
+            )
         raise DispatchError("Preview operation failed; inspect private evidence logs") from exc
 
 
-def collect(artifact_path, output):
+def scenarios_for(artifact):
+    changed_source = "\n".join(
+        line
+        for item in artifact["changes"]
+        for line in unified_diff(
+            (item.get("before") or "").splitlines(), (item.get("after") or "").splitlines(), n=0
+        )
+        if line.startswith(("+", "-"))
+    )
+    scenarios = [
+        name
+        for name, token in [
+            ("spoiler", "renderSpoiler"),
+            ("drag", "dragstart"),
+            ("home", "dl-step"),
+        ]
+        if token in changed_source
+    ]
+    if "home" not in scenarios and any(
+        item["path"].endswith("/deck_lab/home.html") for item in artifact["changes"]
+    ):
+        scenarios.append("home")
+    return scenarios
+
+
+def collect(artifact_path, output, *, source_repository=None):
     os.umask(0o077)
     project = load_project(INTEGRATION / "project.toml")
     raw = artifact_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     artifact = json.loads(raw)
+    scenarios = scenarios_for(artifact)
     if artifact["project"] != project.id or artifact["policy"] != project.fingerprint:
         raise DispatchError("Preview artifact policy is stale")
-    _, before = export(replace(project, base_ref=artifact["base_sha"]))
+    _, before = export(
+        replace(
+            project,
+            base_ref=artifact["base_sha"],
+            repository=str(source_repository or project.repository),
+        )
+    )
     after = dict(before)
     for item in artifact["changes"]:
         if item["after"] is None:
@@ -155,6 +194,8 @@ def collect(artifact_path, output):
                 network,
                 "--network-alias",
                 "app",
+                "--network-alias",
+                "app.test",
                 *common,
                 "--memory=512m",
                 "--mount",
@@ -215,6 +256,8 @@ def collect(artifact_path, output):
                     "HOME=/tmp",
                     "--env",
                     "EVIDENCE_PHASE=" + phase,
+                    "--env",
+                    "EVIDENCE_SCENARIOS=" + ",".join(scenarios),
                     "--mount",
                     f"type=bind,src={captures},dst=/evidence",
                     "--entrypoint",
@@ -223,7 +266,8 @@ def collect(artifact_path, output):
                     "-c",
                     (INTEGRATION / "browser_evidence.py").read_text(),
                 ],
-                timeout=120,
+                timeout=180,
+                log=output / (phase + "-browser.log"),
             )
             created.remove(browser)
             if phase == "before":
@@ -236,7 +280,7 @@ def collect(artifact_path, output):
             if (
                 not capture.is_file()
                 or capture.is_symlink()
-                or capture.suffix not in {".json", ".png"}
+                or capture.suffix not in {".json", ".png", ".webm"}
             ):
                 raise DispatchError("Unexpected browser output")
             capture.rename(output / capture.name)
@@ -300,12 +344,20 @@ def collect(artifact_path, output):
         receipt.update(containers=created, networks=networks)
         saved.write_text(json.dumps(receipt, indent=2))
         manifest = {
-            "files": ["before.json", "after.json", *base_result["images"], *result["images"]],
+            "files": [
+                "before.json",
+                "after.json",
+                *base_result["images"],
+                *result["images"],
+                *base_result.get("videos", []),
+                *result.get("videos", []),
+            ],
             "images": base_result["images"] + result["images"],
             "preview": receipt,
             "limitations": [
-                "Synthetic one/two-commander fixtures; no production data or external artwork.",
-                "Chromium desktop/mobile editor scenarios only; issue-specific behavior outside these scenarios needs additional evidence.",
+                "Synthetic cards and locally decoded test artwork; no production data or external network.",
+                "Chromium and WebKit desktop/mobile; Playwright WebKit is not branded Safari 26.",
+                "Native drag compositor pixels are not captured by page screenshots; drag telemetry identifies the selected image and actual mouse/drop behavior.",
             ],
         }
         (output / "evidence.json").write_text(json.dumps(manifest, indent=2))

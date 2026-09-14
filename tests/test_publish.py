@@ -1,14 +1,17 @@
 import json
+import subprocess
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from helpers import project
 
 from sdlc_dispatcher.config import DispatchError
 from sdlc_dispatcher.http import ProviderError
-from sdlc_dispatcher.publish import publish
+from sdlc_dispatcher.publish import publish, publish_ready
 from sdlc_dispatcher.store import Store
 from sdlc_dispatcher.workspace import write_artifact
 
@@ -98,6 +101,64 @@ class PublishTests(unittest.TestCase):
         count = len(self.client.calls)
         self.assertEqual(publish(self.store, self.project, self.job, client=self.client), url)
         self.assertEqual(len(self.client.calls), count)
+
+    def test_automatic_publication_reconciles_after_lease_and_retains_diagnostic(self):
+        configured = replace(
+            self.project,
+            automatic_publication=True,
+            review_required=True,
+            review_policy="/policy",
+            review_image="review",
+            review_auth_home="/auth",
+            publish_command=["trusted-publisher"],
+        )
+
+        def partial_write(*args, **kwargs):
+            with self.store.transaction() as db:
+                db.execute(
+                    "UPDATE jobs SET status='publishing',deadline=700 WHERE id=?", (self.job,)
+                )
+            raise subprocess.CalledProcessError(
+                1, args[0], stderr=b'{"error":"Provider transport error"}'
+            )
+
+        with patch("sdlc_dispatcher.publish.subprocess.run", side_effect=partial_write):
+            publish_ready(self.store, configured, self.job, now=100)
+        self.assertEqual(self.store.events(self.job)[-1]["action"], "publication_retry_scheduled")
+        self.assertIn("Provider transport error", self.store.events(self.job)[-1]["detail"])
+        with patch("sdlc_dispatcher.publish.subprocess.run") as run:
+            publish_ready(self.store, configured, self.job, now=200)
+            run.assert_not_called()
+            publish_ready(self.store, configured, self.job, now=701)
+            self.assertEqual(run.call_args.args[0], ["trusted-publisher", self.job, "--reconcile"])
+
+    def test_publication_recovery_is_bounded_and_does_not_stall_coding(self):
+        configured = replace(
+            self.project,
+            automatic_publication=True,
+            review_required=True,
+            review_policy="/policy",
+            review_image="review",
+            review_auth_home="/auth",
+            publish_command=["trusted-publisher"],
+        )
+        with self.store.transaction() as db:
+            db.execute("UPDATE jobs SET status='publishing',deadline=0 WHERE id=?", (self.job,))
+        with patch(
+            "sdlc_dispatcher.publish.subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                1, ["publish"], stderr=b'{"error":"Offline"}'
+            ),
+        ) as run:
+            for now in [100, 161, 222, 283]:
+                publish_ready(self.store, configured, self.job, now=now)
+            self.assertEqual(run.call_count, 3)
+        self.assertEqual(self.store.events(self.job)[-1]["action"], "publication_needs_attention")
+        another = self.store.ingest(
+            self.project, "manual", "another", {"title": "Bug", "description": "Fix"}
+        )
+        self.store.approve(another, self.project)
+        self.assertEqual(self.store.claim(self.project)["id"], another)
 
     def test_lost_pr_response_reconciles_without_duplicate_creation(self):
         self.client.lose_response = True

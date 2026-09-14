@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .activity import mark, monitor
 from .config import DispatchError
 from .privacy import model_report
 from .review_contract import validate_review
@@ -70,10 +71,12 @@ def validate_receipt(folder, project, artifact, artifact_digest):
 
 def review_candidate(store, project, job, artifact_path, artifact_digest, folder):
     """Called after each independently verified candidate, including repairs."""
+    cancelled = monitor(store, job)
     artifact = json.loads(artifact_path.read_text())
     evidence = {p.name: p for p in folder.glob("*.log") if p.name != "agent.log"}
     images, limitations = [], []
     if project.review_evidence_command:
+        mark(store, job, "browser")
         output = folder / "evidence"
         output.mkdir(mode=0o700)
         env = {key: value for key, value in os.environ.items() if key in {"PATH", "HOME", "TMPDIR"}}
@@ -98,7 +101,7 @@ def review_candidate(store, project, job, artifact_path, artifact_digest, folder
                 deadline = time.monotonic() + min(remaining, 300)
                 try:
                     while process.poll() is None:
-                        if store.cancelled(job["id"]) or time.monotonic() >= deadline:
+                        if cancelled() or time.monotonic() >= deadline:
                             raise DispatchError("Browser preparation cancelled or timed out")
                         time.sleep(0.25)
                     if process.returncode:
@@ -118,9 +121,13 @@ def review_candidate(store, project, job, artifact_path, artifact_digest, folder
             valid_path(name)
             if "/" in name or (output / name).is_symlink():
                 raise DispatchError("Invalid browser evidence path")
+            if Path(name).suffix.lower() in {".png", ".webm"}:
+                continue
             evidence[name] = output / name
-        images = manifest["images"]
-        limitations = manifest["limitations"]
+        limitations = [
+            *manifest["limitations"],
+            "Screenshots are optional and omitted; visual appearance was not independently inspected.",
+        ]
         receipt = manifest.get("preview")
         if receipt:
             validate_preview(receipt, artifact_digest)
@@ -145,13 +152,14 @@ def review_candidate(store, project, job, artifact_path, artifact_digest, folder
     if remaining < 10 or store.cancelled(job["id"]):
         raise DispatchError("Job cancelled or deadline exhausted before review")
     review_folder = folder / "review"
+    mark(store, job, "astra")
     run_review(
         packet=packet,
         output=review_folder,
         auth_home=Path(project.review_auth_home),
         image=project.review_image,
         timeout=min(project.review_timeout_seconds, remaining),
-        cancelled=lambda: store.cancelled(job["id"]),
+        cancelled=cancelled,
     )
     review = validate_receipt(review_folder, project, artifact, artifact_digest)
     preview = store.preview(job["id"], artifact_digest)

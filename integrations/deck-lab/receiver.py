@@ -104,8 +104,12 @@ def serve():
 
     secret = read_secret(SECRET)
     os.environ["DISPATCHER_LINEAR_SECRET_DECK_LAB"] = secret
-    project = load_project(Path(__file__).with_name("project.toml"))
-    app = application(Store(STATE / "queue.db"), {project.id: project})
+    store = Store(STATE / "queue.db")
+
+    def app(environ, start_response):
+        project = load_project(Path(__file__).with_name("project.toml"))
+        return application(store, {project.id: project})(environ, start_response)
+
     waitress_serve(
         RateLimit(app),
         host="127.0.0.1",

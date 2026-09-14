@@ -6,12 +6,25 @@ build-backend = "setuptools.build_meta"
 name = "sdlc-dispatcher"
 version = "0.1.0"
 description = "A project-independent, approval-gated feedback-to-patch dispatcher"
+readme = "README.md"
+keywords = ["developer-tools", "workflow", "docker", "code-review", "automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Software Development :: Quality Assurance",
+]
 requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
 server = ["waitress>=3,<4"]
-dev = ["black==26.5.1", "ruff==0.16.4"]
+dev = ["black==26.5.1", "ruff==0.16.4", "coverage>=7,<8", "build>=1,<2"]
+
+[project.urls]
+Repository = "https://github.com/DylnMtthws/sdlc-dispatcher"
+Issues = "https://github.com/DylnMtthws/sdlc-dispatcher/issues"
+Documentation = "https://github.com/DylnMtthws/sdlc-dispatcher#readme"
 
 [project.scripts]
 sdlc-dispatcher = "sdlc_dispatcher.cli:main"
@@ -29,3 +42,11 @@ select = ["E4", "E7", "E9", "F", "I", "B"]
 [tool.black]
 line-length = 100
 target-version = ["py311"]
+
+[tool.coverage.run]
+source = ["sdlc_dispatcher"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

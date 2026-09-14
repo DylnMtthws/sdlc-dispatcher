@@ -4,7 +4,7 @@ base_ref = "main"
 image = "deck-lab-cursor:local"
 engine = "cursor"
 model = "grok-4.6[effort=high,fast=false]"
-github_repository = "DylnMtthws/commander-deck-engine"
+github_repository = "DylnMtthws/deck-lab"
 checks = [
   ["ruff", "check", "--no-cache", "src", "tests"],
   ["black", "--check", "src", "tests"],
@@ -24,10 +24,10 @@ protected_paths = [
   "src/sabermetrics/ui/static/*auth*",
   "src/sabermetrics/ui/static/*admin*",
 ]
-automatic_intake = true
+automatic_intake = false
 linear_intake_mode = "feedback"
 required_labels = ["user-feedback"]
-production_health_url = "https://dylnmtthws-decklab.fly.dev/healthz"
+production_health_url = "https://decklab.studio/healthz"
 linear_team_id = "3ae1d242-a6ec-40e1-8c54-e47428d91ae0"
 linear_project_id = "a250d8f0-f9bf-4bfb-a51f-eb0222b10de3"
 max_daily_runs = 0
@@ -40,11 +40,15 @@ review_required = true
 review_policy = "reviewer-policy.md"
 review_image = "deck-lab-agent:local"
 review_auth_home = "../../.dispatcher/secrets/reviewer-codex"
-review_context_paths = ["src/sabermetrics/ui/templates/deck_lab/builder.html", "src/sabermetrics/ui/templates/deck_lab/base.html"]
+review_context_paths = [
+  "src/sabermetrics/ui/templates/deck_lab/builder.html",
+  "src/sabermetrics/ui/templates/deck_lab/base.html",
+  "src/sabermetrics/ui/static/deck-lab-library.js",
+]
 review_evidence_command = ["/Users/dylan/Projects/sdlc-dispatcher/.venv/bin/python", "/Users/dylan/Projects/sdlc-dispatcher/integrations/deck-lab/evidence.py"]
 max_review_repairs = 2
 review_timeout_seconds = 900
-automatic_publication = true
+automatic_publication = false
 publish_command = ["/Users/dylan/Projects/sdlc-dispatcher/.venv/bin/python", "/Users/dylan/Projects/sdlc-dispatcher/integrations/deck-lab/publish.py"]
 
 [linear_statuses]

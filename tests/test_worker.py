@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -7,7 +8,7 @@ from helpers import project, repository
 
 from sdlc_dispatcher.config import DispatchError
 from sdlc_dispatcher.store import Store
-from sdlc_dispatcher.worker import work_once
+from sdlc_dispatcher.worker import experiment_feedback, work_once
 
 
 class FakeRunner:
@@ -81,6 +82,31 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(runner.calls), 1)
         self.assertEqual(self.store.get(self.job)["status"], "blocked")
 
+    def test_worker_reports_real_subphases_and_keeps_cancellation_polling(self):
+        phases = []
+        store = self.store
+
+        class ObservedRunner(FakeRunner):
+            def run(self, **kwargs):
+                with store.connect() as db:
+                    activity = db.execute(
+                        "SELECT * FROM agent_activity WHERE job=?", (kwargs["job"],)
+                    ).fetchone()
+                phases.append(activity["phase"])
+                self_test.assertFalse(kwargs["cancelled"]())
+                return super().run(**kwargs)
+
+        self_test = self
+        work_once(
+            self.store,
+            self.project,
+            self.root / "artifacts",
+            runner=ObservedRunner(),
+            demo_command=["fixture"],
+        )
+        self.assertEqual(phases, ["baseline", "coding", "regression", "checks"])
+        self.assertEqual(self.store.get(self.job)["status"], "ready")
+
     def test_failed_check_blocks_artifact(self):
         self.run_worker("verification")
         self.assertEqual(self.store.get(self.job)["status"], "blocked")
@@ -113,6 +139,23 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaises(DispatchError):
             work_once(self.store, self.project, self.root / "artifacts", runner=FakeRunner())
         self.assertEqual(self.store.get(self.job)["attempts"], 0)
+
+    def test_experiment_observations_are_scoped_to_the_report_revision(self):
+        job = self.store.get(self.job)
+        with self.store.transaction() as db:
+            self.store.audit(
+                db,
+                self.job,
+                "experiment_feedback",
+                json.dumps(
+                    {
+                        "revision": job["revision"],
+                        "summary": "Browser rejects conflicting drag effects.",
+                    }
+                ),
+            )
+        self.assertIn("conflicting drag effects", experiment_feedback(self.store, job))
+        self.assertEqual(experiment_feedback(self.store, {**job, "revision": "new report"}), "")
 
 
 class RepairTests(unittest.TestCase):
@@ -210,6 +253,29 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(len(reviews), 1)
         self.assertEqual(sum(c["phase"] == "agent" for c in runner.calls), 1)
         self.assertEqual(self.store.get(self.job)["status"], "blocked")
+
+    def test_actionable_uncertainty_returns_to_builder_and_requires_new_pass(self):
+        finding = {**self.finding(), "blocking": False, "category": "validation"}
+        runner, reviews = self.exercise(
+            [
+                {
+                    "verdict": "needs_human_review",
+                    "findings": [finding],
+                    "limitations": ["Missing behavioral evidence"],
+                },
+                {"verdict": "pass", "findings": []},
+            ]
+        )
+        self.assertEqual(self.store.get(self.job)["status"], "ready")
+        self.assertEqual(len(reviews), 2)
+        prompts = [c["stdin"] for c in runner.calls if c["phase"] == "agent"]
+        self.assertIn("Missing behavioral evidence", prompts[1])
+
+    def test_uncertainty_does_not_turn_low_priority_advice_into_required_changes(self):
+        finding = {**self.finding(), "blocking": False, "severity": "low"}
+        runner, reviews = self.exercise([{"verdict": "needs_human_review", "findings": [finding]}])
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(sum(c["phase"] == "agent" for c in runner.calls), 1)
 
     def test_cancellation_cannot_be_overridden_by_pass(self):
         self.exercise([{"verdict": "pass", "findings": []}], cancelled=True)

@@ -12,6 +12,7 @@ from sdlc_dispatcher.review_contract import PROMPT, SCHEMA
 from sdlc_dispatcher.review_gate import publication_review, sha
 from sdlc_dispatcher.review_packet import prepare_packet
 from sdlc_dispatcher.store import Store
+from sdlc_dispatcher.worker import previous_review_feedback
 from sdlc_dispatcher.workspace import File, changes, export, snapshot, write_artifact
 
 
@@ -122,6 +123,13 @@ class ReviewGateTests(unittest.TestCase):
 
     def test_current_review_passes(self):
         self.assertEqual(self.validate()["review"]["verdict"], "pass")
+
+    def test_retry_receives_verified_feedback_only_for_same_report_revision(self):
+        job = self.store.get(self.job)
+        self.assertIn("BEGIN PRIOR REVIEW", previous_review_feedback(self.store, job))
+        self.assertEqual(previous_review_feedback(self.store, {**job, "revision": "changed"}), "")
+        (self.folder / "review.json").write_text("tampered")
+        self.assertEqual(previous_review_feedback(self.store, job), "")
 
     def test_missing_review_blocks(self):
         with self.store.transaction() as db:

@@ -17,6 +17,12 @@ def invoke():
     parser.add_argument("command", choices=["check-agent", "work"])
     parser.add_argument("--watch", action="store_true")
     args = parser.parse_args()
+    if args.command == "work":
+        from sdlc_dispatcher.config import load_project
+
+        project = load_project(Path(__file__).with_name("project.toml"))
+        if not project.automatic_intake:
+            raise SystemExit("Queue execution is disabled; use an explicitly scoped T3 Cursor task")
     state = ROOT / ".dispatcher"
     cursor = read_secret(state / "secrets" / "cursor-api-key")
     if not cursor:

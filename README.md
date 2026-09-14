@@ -1,23 +1,29 @@
 # SDLC Dispatcher
 
-A standalone, single-host tool for turning approved feedback into independently
-tested code changes. Register a project with a TOML file and a trusted development
-image. The dispatcher does not import your application or require widget changes.
+[![Dispatcher checks](https://github.com/DylnMtthws/sdlc-dispatcher/actions/workflows/ci.yml/badge.svg)](https://github.com/DylnMtthws/sdlc-dispatcher/actions/workflows/ci.yml)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
+![Status: single-host pilot](https://img.shields.io/badge/status-single--host%20pilot-orange)
 
-**v0.1 is a single-host pilot.** It includes Linear
-webhook intake, manual JSON intake, a durable SQLite queue, Codex/Cursor workers, and an
-review-gated GitHub draft-PR publisher. Automatic intake defaults to off. No merge or
-production deployment capability is included.
+**Turn approved feedback into independently verified code changes.**
 
-See [the local verification record](docs/verification.md) for tested capabilities
-and measured Deck Lab memory requirements.
+SDLC Dispatcher is a Python orchestration service with signed Linear intake,
+a durable SQLite queue, isolated Codex/Cursor workers, regression verification,
+independent model review, and review-gated GitHub draft PRs. Register an application
+with TOML and a trusted development image; the dispatcher does not import it.
 
-An isolated Codex/Astra review primitive is also available: see the
-[reviewer specification](docs/astra-reviewer-spec.md) and
-[authentication and operating instructions](docs/reviewer-operations.md).
-Completed candidates now enter independent Astra review automatically when registered.
-Publication requires a current passing receipt; up to two bounded repair rounds
-rerun verification and review. See the [review and release specification](docs/github-review-release-spec.md).
+The interesting part is what happens when things go wrong: feedback changes revoke
+approval, moved commits invalidate evidence, lost provider responses trigger
+reconciliation, and generated code never receives publication credentials.
+
+**Start here:** [Architecture and tradeoffs](docs/architecture.md) ·
+[Reproducible demo](#quick-start) · [Audit and validation](docs/audit.md) ·
+[Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
+
+**Status:** v0.1 is a single-host pilot, not a hosted service. Generic projects
+default to manual approval. An optional Deck Lab release controller can merge and
+deploy after a separately configured, verified human approval in Linear. Coding
+agents and reviewers cannot authorize releases. See the
+[release operating contract](docs/linear-release-handoff.md).
 
 ```mermaid
 flowchart LR
@@ -35,9 +41,12 @@ flowchart LR
 ## Quick start
 
 Requires Python 3.11+, Git, and a local Docker daemon. Run as an ordinary user.
+The demo needs no credentials and makes no provider API calls.
 
 ```bash
-python3.11 -m venv .venv
+git clone https://github.com/DylnMtthws/sdlc-dispatcher.git
+cd sdlc-dispatcher
+python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[server,dev]'
 .venv/bin/sdlc-dispatcher init
 docker build -f containers/test.Dockerfile -t sdlc-dispatcher-test:local .
@@ -178,11 +187,17 @@ private report content, so avoid copying its output into public systems.
 ## Deck Lab
 
 The first integration lives entirely in [integrations/deck-lab](integrations/deck-lab/README.md).
-It registers `../deck_lab` without changing Deck Lab's application, widget or
-production configuration. Its initial scope is UI files and new regression tests;
+It registers a sibling Deck Lab repository. Its coding scope is UI files and new regression tests;
 authentication, admin controls and infrastructure require human work.
 
 ## Verification
+
+For a contributor setup, `make check` runs lint, formatting, and unit tests with
+branch coverage. `make docker-test` exercises real containers; `make build` creates
+installable distributions. CI runs Python 3.11–3.13, container checks, and an
+installed-wheel smoke test. See the [current audit](docs/audit.md) for measured
+results and the [historical pilot record](docs/verification.md) for earlier evidence.
+
 
 ```bash
 PYTHONPATH=src python -m unittest discover -s tests -v
@@ -213,7 +228,7 @@ architecture audits are future integrations.
 Deck Lab now uses automatic feedback intake, with no daily run-count quota. Its
 trusted synchronizer projects coding, verification, Astra review, repair, PR and
 production-release stages into Linear. Only a successful release containing the
-merged fix and a matching healthy live build marks it Done. Human code acceptance
-and production approval remain in GitHub. See the
+merged fix and a matching healthy live build marks it Done. A separately enabled release controller can consume a verified human Linear approval
+and perform the authorized GitHub merge and deployment. See the
 [operating contract](docs/automatic-feedback-linear-statuses.md). Generic projects
 retain approval-based intake unless they explicitly select `linear_intake_mode = "feedback"`.

@@ -21,6 +21,7 @@ def prepare_packet(
     limitations: list[str],
     destination: Path,
     context_paths: tuple[str, ...] = (),
+    source_repository=None,
 ):
     raw = artifact.read_bytes()
     if hashlib.sha256(raw).hexdigest() != expected_digest:
@@ -30,7 +31,13 @@ def prepare_packet(
         raise DispatchError("Candidate project or policy changed")
     if not manifest.get("checks") or any(check["exit_code"] for check in manifest["checks"]):
         raise DispatchError("Candidate lacks passing independent checks")
-    sha, base = export(replace(project, base_ref=manifest["base_sha"]))
+    sha, base = export(
+        replace(
+            project,
+            base_ref=manifest["base_sha"],
+            repository=str(source_repository or project.repository),
+        )
+    )
     candidate = dict(base)
     seen = set()
     for item in manifest["changes"]:

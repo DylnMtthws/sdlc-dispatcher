@@ -9,6 +9,7 @@ from pathlib import Path
 
 from receiver import read_secret
 
+from sdlc_dispatcher.activity import reconcile_activity
 from sdlc_dispatcher.config import DispatchError, load_project
 from sdlc_dispatcher.linear_sync import LinearClient, ReleaseObserver, reconcile
 from sdlc_dispatcher.publish import GitHub
@@ -22,7 +23,7 @@ STATES = {
     "ai_review": ("AI Review", "started", "#5e6ad2"),
     "repairing": ("Repairing", "started", "#f2994a"),
     "awaiting_approval": ("In Review", "started", "#5e6ad2"),
-    "ready_for_release": ("Ready for Release", "started", "#4ea7fc"),
+    "ready_for_release": ("Merged — Awaiting Deployment", "started", "#4ea7fc"),
     "deploying": ("Deploying", "started", "#4ea7fc"),
     "blocked": ("Blocked", "started", "#eb5757"),
     "done": ("Done", "completed", "#27ae60"),
@@ -137,6 +138,9 @@ def main():
             if not args.watch:
                 raise
             time.sleep(30)
+        activity_count = reconcile_activity(store, project, linear)
+        if activity_count:
+            print(json.dumps({"linear_activity_updated": activity_count}), flush=True)
         if not args.watch:
             return
         time.sleep(10)

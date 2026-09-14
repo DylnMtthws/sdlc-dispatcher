@@ -1,5 +1,9 @@
 # Local verification — 2026-09-08
 
+> Historical pilot log. Activation and capability statements below describe that
+> date, not current behavior. See the [current audit](audit.md) and
+> [architecture](architecture.md) for the publication baseline.
+
 The standalone dispatcher was built and tested in its own directory and virtual
 environment. Deck Lab source and production configuration were not modified.
 

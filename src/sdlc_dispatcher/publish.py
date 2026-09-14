@@ -16,28 +16,89 @@ from .review_gate import publication_review
 from .store import Store
 
 
-def publish_ready(store, project, job_id):
+def publish_ready(store, project, job_id, *, now=None):
     """Invoke a separate credential-holding publisher after the worker is done."""
-    if not project.automatic_publication or store.get(job_id)["status"] != "ready":
+    now = time.time() if now is None else now
+    job = store.get(job_id)
+    if not project.automatic_publication or job["status"] not in {"ready", "publishing"}:
         return
+    if store.paused() or job["cancel"]:
+        return
+    recovering = job["status"] == "publishing"
+    if recovering and job["deadline"] > now:
+        return
+    with store.transaction() as db:
+        db.execute(
+            "INSERT OR IGNORE INTO publication_attempts(job,artifact_digest) VALUES(?,?)",
+            (job_id, job["artifact_digest"]),
+        )
+        attempt = db.execute(
+            "SELECT * FROM publication_attempts WHERE job=? AND artifact_digest=?",
+            (job_id, job["artifact_digest"]),
+        ).fetchone()
+        if attempt["attempts"] >= 3 or attempt["next_retry"] > now:
+            return
+        db.execute(
+            "UPDATE publication_attempts SET attempts=attempts+1,next_retry=? WHERE job=? AND artifact_digest=?",
+            (now + 600, job_id, job["artifact_digest"]),
+        )
     env = {key: value for key, value in os.environ.items() if key in {"PATH", "HOME", "TMPDIR"}}
     try:
         subprocess.run(
-            [*project.publish_command, job_id],
+            [*project.publish_command, job_id, *(["--reconcile"] if recovering else [])],
             env=env,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             check=True,
             timeout=180,
         )
-    except (OSError, subprocess.SubprocessError):
         with store.transaction() as db:
+            db.execute(
+                "UPDATE publication_attempts SET next_retry=0,last_error='' WHERE job=? AND artifact_digest=?",
+                (job_id, job["artifact_digest"]),
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = "Publisher process failed; inspect private publisher diagnostics"
+        if isinstance(exc, subprocess.CalledProcessError):
+            try:
+                error = json.loads(exc.stderr)["error"]
+                if isinstance(error, str):
+                    from .privacy import model_report
+
+                    detail = model_report({"error": error[:1000]})["error"]
+            except (TypeError, ValueError, KeyError):
+                pass
+        elif isinstance(exc, subprocess.TimeoutExpired):
+            detail = "Publisher timed out; reconcile the existing branch/PR after the lease expires"
+        retry = attempt["attempts"] + 1 < 3 and store.get(job_id)["status"] in {
+            "ready",
+            "publishing",
+        }
+        with store.transaction() as db:
+            db.execute(
+                "UPDATE publication_attempts SET next_retry=?,last_error=? WHERE job=? AND artifact_digest=?",
+                (now + 60, detail, job_id, job["artifact_digest"]),
+            )
             store.audit(
                 db,
                 job_id,
-                "publication_needs_attention",
-                "Inspect publisher auth or reconcile an ambiguous write",
+                "publication_retry_scheduled" if retry else "publication_needs_attention",
+                detail,
             )
+
+
+def recover_publications(store, project):
+    """A provider outage must not strand a verified candidate or stall coding."""
+    with store.connect() as db:
+        jobs = [
+            r["id"]
+            for r in db.execute(
+                "SELECT id FROM jobs WHERE project=? AND status IN ('ready','publishing')",
+                (project.id,),
+            )
+        ]
+    for job_id in jobs:
+        publish_ready(store, project, job_id)
 
 
 class GitHub:
@@ -108,14 +169,14 @@ def publish(store: Store, project: Project, job_id: str, *, reconcile=False, cli
             raise DispatchError(
                 "Base branch moved; approve a fresh attempt to reverify before publishing"
             )
-    except DispatchError:
+    except DispatchError as exc:
         if job["status"] == "ready":
             # No provider mutation has been attempted on this first publication.
             with store.transaction() as db:
                 db.execute(
                     "UPDATE jobs SET status='blocked',updated=? WHERE id=?", (time.time(), job_id)
                 )
-                store.audit(db, job_id, "publication_preflight_blocked")
+                store.audit(db, job_id, "publication_preflight_blocked", str(exc))
         raise
     commit = call("GET", "/git/commits/" + artifact["base_sha"])
     tree_items = []
@@ -206,10 +267,15 @@ def publish(store: Store, project: Project, job_id: str, *, reconcile=False, cli
             if review_receipt["preview"]:
                 body += f"\n[Try this exact candidate (Tailscale required)]({review_receipt['preview']['url']})\n"
                 body += f"\n[Read the detailed Astra review]({review_receipt['preview']['url']}/__dispatcher__/review)\n"
-            body += (
-                "\nMark this draft ready and merge after trying the preview and CI passes. "
-                "Merging accepts the code. Production release requires the project’s separate approval workflow.\n"
-            )
+            from .release_store import settings
+
+            if settings(store, project).get("mode", "off") != "off":
+                body += "\nReview the evidence in Linear when the issue reaches Ready for Your Review. Moving it to Ready to Deploy authorizes the controller to merge and release this candidate.\n"
+            else:
+                body += (
+                    "\nMark this draft ready and merge after trying the preview and CI passes. "
+                    "Merging accepts the code. Production release requires the project’s separate approval workflow.\n"
+                )
         if job["source"] == "linear":
             # UUIDs are validated at intake; never copy the report title/body here.
             body += f"\nLinear issue reference: `{job['external_id']}`\n"

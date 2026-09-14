@@ -1,5 +1,6 @@
 """Durable, controller-owned Linear status projection. Never executes candidate code."""
 
+import json
 import re
 import time
 from urllib.parse import quote
@@ -8,9 +9,7 @@ from .config import DispatchError
 from .http import request_json
 from .linear import eligible, ingest_feedback, terminal
 
-FIELDS = (
-    "id title description state { id type } team { id } project { id } labels { nodes { name } }"
-)
+FIELDS = "id title description archivedAt state { id type } team { id } project { id } labels { nodes { name } }"
 
 
 class LinearClient:
@@ -48,6 +47,50 @@ class LinearClient:
             or result.get("issue", {}).get("state", {}).get("id") != state_id
         ):
             raise DispatchError("Linear did not confirm the requested issue status")
+
+    def ensure_comment(self, issue_id, comment_id, body, *, mutable=False):
+        # A stable client-generated UUID prevents duplicate creation even when a
+        # successful mutation loses its response or the controller crashes.
+        cursor = None
+        while True:
+            issue = self.call(
+                """query($id:String!,$after:String){issue(id:$id){
+                comments(first:100,after:$after){nodes{id body}
+                pageInfo{hasNextPage endCursor}}}}""",
+                {"id": issue_id, "after": cursor},
+            )["issue"]
+            connection = issue["comments"]
+            existing = next(
+                (item for item in connection["nodes"] if item["id"] == comment_id), None
+            )
+            if existing:
+                if mutable and existing.get("body") != body:
+                    result = self.call(
+                        """mutation($id:String!,$body:String!){
+                        commentUpdate(id:$id,input:{body:$body}){success comment{id body}}}""",
+                        {"id": comment_id, "body": body},
+                        write=True,
+                    )["commentUpdate"]
+                    if (
+                        not result.get("success")
+                        or result.get("comment", {}).get("id") != comment_id
+                    ):
+                        raise DispatchError("Linear did not confirm the activity update")
+                return
+            if not connection["pageInfo"]["hasNextPage"]:
+                break
+            next_cursor = connection["pageInfo"]["endCursor"]
+            if not next_cursor or next_cursor == cursor:
+                raise DispatchError("Linear comment pagination did not advance")
+            cursor = next_cursor
+        result = self.call(
+            """mutation($input:CommentCreateInput!){
+            commentCreate(input:$input){success comment{id}}}""",
+            {"input": {"id": comment_id, "issueId": issue_id, "body": body}},
+            write=True,
+        )["commentCreate"]
+        if not result.get("success") or result.get("comment", {}).get("id") != comment_id:
+            raise DispatchError("Linear did not confirm the requested issue comment")
 
     def backfill(self, store, project):
         cursor = None
@@ -104,6 +147,34 @@ class ReleaseObserver:
             health = {}
         live = health.get("build_sha") if health.get("status") == "ok" else None
         live = live if valid_sha(live) else None
+        from . import digitalocean
+
+        if digitalocean.enabled(self.project):
+            evidence = digitalocean.status()
+            receipt, remote = evidence["release"], evidence["health"]
+            verified = (
+                {live}
+                if live
+                and remote.get("healthy")
+                and remote.get("build_sha") == live
+                and receipt.get("sha") == live
+                and receipt.get("status") == "success"
+                else set()
+            )
+            active, failed = [], []
+            if self.store:
+                with self.store.connect() as db:
+                    for row in db.execute(
+                        "SELECT status,data FROM release_requests WHERE project=?",
+                        (self.project.id,),
+                    ):
+                        head = json.loads(row[1]).get("merge_sha")
+                        if valid_sha(head) and row[0] == "local_deploying":
+                            active.append(head)
+                        if valid_sha(head) and row[0] == "blocked":
+                            failed.append(head)
+            self._release = {"live": live, "verified": verified, "active": active, "failed": failed}
+            return self._release
         runs = self.github.call(
             "GET",
             "/actions/workflows/deploy-production.yml/runs?branch="
@@ -215,6 +286,9 @@ def reconcile(store, project, linear, observer, *, now=None, observe_releases=Tr
                     desired, release_sha = "done", release["live"]
                 else:
                     desired, release_sha = observer.stage(job)
+                from .release_store import projected_stage
+
+                desired = projected_stage(store, project, job, desired)
                 store.set_stage(job["id"], desired)
                 with store.transaction() as db:
                     db.execute(
@@ -230,9 +304,22 @@ def reconcile(store, project, linear, observer, *, now=None, observe_releases=Tr
                 }.get(job["status"], "blocked")
                 store.set_stage(job["id"], desired)
             stage = store.stage(job["id"])
-            if stage["synced_version"] == stage["version"]:
+            if job["status"] in {"ready", "publishing"}:
+                from .release_store import settings
+
+                if settings(store, project).get("mode", "off") != "off":
+                    store.set_stage(job["id"], "testing")
+                    stage = store.stage(job["id"])
+            from .blocked_comments import comment_pending, deliver_comment
+
+            needs_comment = stage["stage"] == "blocked" and comment_pending(store, job, stage)
+            if stage["synced_version"] == stage["version"] and not needs_comment:
                 continue
             state_id = project.linear_statuses.get(stage["stage"])
+            if stage["stage"] == "release_approved":
+                from .release_store import settings
+
+                state_id = settings(store, project).get("approval_state")
             if not state_id:
                 raise DispatchError("Pipeline stage has no registered Linear state")
             issue = linear.issue(job["external_id"])
@@ -259,6 +346,10 @@ def reconcile(store, project, linear, observer, *, now=None, observe_releases=Tr
             # re-read first and avoid a duplicate mutation if the state already matches.
             if store.stage(job["id"])["version"] != stage["version"]:
                 continue
+            if needs_comment:
+                deliver_comment(store, job, stage, linear)
+                if store.stage(job["id"])["version"] != stage["version"]:
+                    continue
             if state.get("id") != state_id:
                 linear.update(job["external_id"], state_id)
                 changed += 1

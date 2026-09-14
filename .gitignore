@@ -6,3 +6,12 @@ __pycache__/
 dist/
 build/
 .ruff_cache/
+.env.*
+!.env.example
+.private/
+.DS_Store
+.coverage*
+coverage.xml
+htmlcov/
+*.log
+.pytest_cache/

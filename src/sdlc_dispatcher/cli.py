@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from .config import DispatchError, Project, load_project
-from .publish import publish, publish_ready
+from .publish import publish, publish_ready, recover_publications
 from .runner import DockerRunner
 from .server import application
 from .store import Store
@@ -205,6 +205,7 @@ def main(argv=None):
             result = {"recovered": [row["id"] for row in stale]}
         elif args.command == "work":
             while True:
+                recover_publications(store, project)
                 job = work_once(
                     store,
                     project,

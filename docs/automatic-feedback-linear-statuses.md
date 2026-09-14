@@ -10,7 +10,8 @@ their limits and become visible as Blocked rather than being retried indefinitel
 The former three-initial-runs daily quota is disabled (`max_daily_runs = 0`). Global
 coding concurrency stays one, each attempt has the existing 30-minute deadline,
 and the independent Astra gate allows at most two repair rounds. Code acceptance
-and production deployment still require the owner's GitHub decisions.
+and production deployment can now be authorized by the owner in Linear; see
+[the Linear release handoff](linear-release-handoff.md).
 
 | Event | Linear status |
 | --- | --- |
@@ -19,8 +20,9 @@ and production deployment still require the owner's GitHub decisions.
 | Cursor coding | In Progress |
 | Independent browser evidence and Astra review | AI Review |
 | Bounded Cursor repair | Repairing |
-| Verified candidate / draft PR awaiting human acceptance | In Review |
-| PR merged, not yet verified live | Ready for Release |
+| Current passing candidate with delivered screenshot evidence | Ready for Your Review |
+| Verified owner approval to merge and deploy | Ready to Deploy |
+| PR merged, not yet verified live | Merged — Awaiting Deployment |
 | Production deploy job executing after environment approval | Deploying |
 | Successful production workflow and healthy live build containing the merge | Done |
 | Failed checks/review, exhausted bounds, failed publication/release | Blocked |
@@ -28,7 +30,14 @@ and production deployment still require the owner's GitHub decisions.
 
 The local pipeline projection is stored durably in SQLite. Stage writes have a
 monotonically increasing version and an acknowledged version. The controller reads
-Linear before changing only `stateId`; it never rewrites report text or adds comments.
+Linear before changing `stateId`; it never rewrites report text. Every Blocked stage
+also gets a reason comment with the current attempt's verified Astra summary,
+findings, requested next steps and evidence limitations when available. Failures
+before review and publication/release failures are identified separately from
+Astra's verdict. Existing Blocked stages receive missing comments on reconciliation.
+The controller persists each comment body and stable UUID before sending it, checks
+Linear for an already-created comment on retries, and confirms the comment before
+acknowledging the Blocked status. Comment delivery failures use the same retry queue.
 A lost response retries by re-reading and acknowledging an already matching state.
 Newer stage versions supersede stale writes. Provider failures retain retry state
 and cannot produce a false completion. Status delivery does not pause coding or
@@ -38,6 +47,61 @@ The synchronizer processes stage changes every ten seconds, observes GitHub ever
 thirty seconds, and backfills missed feedback every five minutes. Very short stages
 may be coalesced. Timestamps and all original events remain in the local audit log.
 No unauthenticated GitHub webhook or public administrative endpoint is introduced.
+
+## Activity in Linear
+
+Each open pipeline issue has one **Agent activity** comment, edited in place across
+stages, repair rounds, retries, and dispatcher restarts. It shows the current actor
+and task, attempt and repair count, next step, task start time, and update time.
+The Linear status remains the board-level overview; open the issue to see this card.
+
+The worker reports controller-owned milestones for baseline checks, Cursor coding
+or repair, regression reproduction, candidate verification, browser evidence capture,
+and Astra review. A supervisor heartbeat is recorded at most every 15 seconds while
+the worker polls an executing process. The card distinguishes a responding supervisor
+from an overdue heartbeat (90 seconds without a report). A heartbeat is not proof of
+useful agent progress; time in the current task makes a long-running phase visible.
+
+The sync loop checks every ten seconds, coalesces edits to at most one per 15 seconds,
+and refreshes unchanged running tasks about every two minutes. Short phases may be
+coalesced. If Linear or the local synchronizer is unavailable, the last update time
+stays visible; the card cannot promise real-time status during that outage.
+
+Activity delivery has its own durable UUID, acknowledgement and retry backoff. A
+lost response or restart reuses the same comment; activity errors cannot hold up
+the workflow. No raw agent transcripts, tool arguments, private logs, or report text
+are copied into the card. This uses the existing Linear API-key integration and
+[Linear's comment API](https://linear.app/developers/graphql); it requires no new OAuth
+agent installation. Editing one card avoids new per-step comments; notification
+behavior still depends on Linear and the viewer's notification settings.
+
+The final Astra readout, screenshot review handoff, actionable blocker reason, and
+verified deployment receipt remain separate comments. Existing cards settle when
+work stops or needs owner review; historical Done/Canceled issues do not receive new
+activity cards. Existing open Blocked issues receive a truthful stopped-work summary.
+Archived issues are skipped; Linear does not accept new comments on archived issues.
+
+DYL-14's activity test also exposed a browser-routing gap: home-page alignment fixes
+were being reviewed against deck-builder screenshots. Changes to the home template
+or `.dl-step` styles now select the home-page scenario. It captures all three "How it
+goes" boxes in Chromium and WebKit at 1920×945 and 390×844, plus doubled heading text
+to exercise wrapping. Section close-ups, desktop page context, first-line baseline
+measurements and overflow checks accompany the candidate. The text-size stress test
+is labeled separately from real browser zoom, and measurement probes are removed
+before screenshots.
+
+Publication failures now retain the trusted publisher's diagnostic and retry up to
+three invocations per verified artifact. After a partial write, the controller
+waits for the publisher lease and reconciles the existing branch/PR. A stranded
+publication no longer holds the coding concurrency slot. Exhausted publication
+retries still become Blocked with a reason comment.
+
+An explicit coding retry carries forward the previous verified review only when
+it belongs to the same report revision. Actionable `needs_human_review` findings
+return to the builder within the existing two-repair limit; each repair reruns
+independent checks, fresh browser evidence and Astra. Uncertainty without an
+actionable repair remains a decision for the owner. Neither path bypasses the
+passing-review requirement for publication.
 
 For completion, match the fixed production health build SHA to a successful main
 `Deploy production` run whose `deploy` job succeeded. Then verify the PR's actual
@@ -61,7 +125,8 @@ The dedicated `linear-status-api-key` has Read/Write access to the feedback team
 It is loaded only by the trusted status synchronizer. Cursor and Astra receive
 neither it nor the read-only Linear/GitHub publisher credentials. The synchronizer
 uses the existing publisher key for read-only GitHub requests and never merges or
-deploys. Initial state setup adds missing team states without renaming existing ones.
+deploys. The separate Linear release controller uses the owner GitHub session only
+after a verified screenshot-bound owner approval. Initial state setup adds missing team states without renaming existing ones.
 
 ```bash
 .venv/bin/python integrations/deck-lab/save_credential.py linear-status
