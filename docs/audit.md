@@ -8,8 +8,8 @@ or a claim that every execution path is verified.
 
 | Check | Result |
 | --- | --- |
-| Offline unit/provider-contract suite | 190 discovered, 183 passed, 7 Docker tests skipped |
-| Full suite with Docker enabled | 190 passed, no skips |
+| Offline unit/provider-contract suite | 191 discovered, 183 passed, 8 Docker tests skipped |
+| Full suite with Docker enabled | 191 passed, no skips |
 | Ruff and Black | Passed across core, tests, and Deck Lab Python adapters |
 | Combined statement/branch coverage | 60% offline; 65% with Docker enabled |
 | Source distribution and wheel | Built successfully |
@@ -29,6 +29,12 @@ README badge. Local results above do not imply a live coding-model, Linear,
 GitHub-release, or production-deployment test.
 
 ## Findings addressed
+
+- **Proxy startup race found in hosted CI:** Docker's detached-start response
+  preceded the proxy listener becoming ready on a faster Linux runner. Workers
+  now wait for a bounded in-container socket probe before launching. A regression
+  test delays proxy startup by two seconds; it failed with connection refused
+  before the fix. The hosted container job now also runs the reviewer tests.
 
 - **Host-dependent storage test:** the storage monitor test discovered this
   developer host's active DigitalOcean provider. Its fixture now explicitly

@@ -48,7 +48,7 @@ jobs:
       - name: Build disposable test image
         run: docker build -f containers/test.Dockerfile -t sdlc-dispatcher-test:local .
       - name: Container boundary and feedback-to-artifact demo
-        run: PYTHONPATH=src DISPATCHER_DOCKER_TESTS=1 python -m unittest discover -s tests -p test_docker.py -v
+        run: PYTHONPATH=src DISPATCHER_DOCKER_TESTS=1 python -m unittest discover -s tests -v
   package:
     name: Build and install wheel
     runs-on: ubuntu-latest

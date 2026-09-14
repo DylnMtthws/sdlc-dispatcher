@@ -4,6 +4,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from helpers import project
 
@@ -154,3 +155,37 @@ for origin in ('https://api.openai.com', 'https://example.com'):
             network=True,
         )
         self.assertEqual(code, 0, (self.root / "cursor-egress.log").read_text())
+
+    def test_worker_waits_for_slow_proxy_startup(self):
+        workspace = self.root / "workspace"
+        workspace.mkdir()
+        read_text = Path.read_text
+
+        def delayed_proxy(path, *args, **kwargs):
+            source = read_text(path, *args, **kwargs)
+            if path.name == "egress_proxy.py":
+                return "import time; time.sleep(2)\n" + source
+            return source
+
+        program = """import urllib.request, urllib.error
+try:
+    urllib.request.urlopen('https://example.com', timeout=3)
+except urllib.error.URLError as error:
+    assert '403' in str(error), str(error)
+else:
+    raise AssertionError('Proxy allowed a non-model destination')
+"""
+        with patch.object(Path, "read_text", delayed_proxy):
+            code = self.runner.run(
+                project=self.project,
+                image=self.image,
+                workspace=workspace,
+                command=["python", "-c", program],
+                job="slow-proxy-test",
+                phase="agent",
+                deadline=time.time() + 30,
+                cancelled=lambda: False,
+                log=self.root / "slow-proxy.log",
+                network=True,
+            )
+        self.assertEqual(code, 0, (self.root / "slow-proxy.log").read_text())

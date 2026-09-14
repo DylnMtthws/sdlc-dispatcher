@@ -116,6 +116,26 @@ class DockerRunner:
                 engine,
             ],
             ["network", "connect", "--alias", "model-egress", network, name],
+            # Docker returning a container ID does not mean Python has bound the
+            # proxy socket. Probe inside the trusted proxy before starting work.
+            # This has no repository mount or credentials and never contacts a provider.
+            [
+                "exec",
+                name,
+                "python",
+                "-c",
+                """import socket, time
+until = time.monotonic() + 10
+while True:
+    try:
+        with socket.create_connection(('127.0.0.1', 8080), timeout=0.5):
+            break
+    except OSError:
+        if time.monotonic() >= until:
+            raise SystemExit('Model egress proxy did not become ready')
+        time.sleep(0.1)
+""",
+            ],
         ]
         try:
             for command in commands:
