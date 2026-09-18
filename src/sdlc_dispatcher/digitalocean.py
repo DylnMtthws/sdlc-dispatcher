@@ -10,7 +10,8 @@ from .config import DispatchError
 ROOT = (
     Path(
         os.environ.get(
-            "DISPATCHER_INFRA_ROOT", Path(__file__).resolve().parents[3] / "decklab-infra"
+            "DISPATCHER_INFRA_ROOT",
+            Path(__file__).resolve().parents[3] / "mtg" / "deck-lab" / "infra",
         )
     )
     .expanduser()

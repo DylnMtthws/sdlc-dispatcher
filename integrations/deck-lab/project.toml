@@ -1,5 +1,5 @@
 id = "deck-lab"
-repository = "../../../deck_lab"
+repository = "../../../mtg/deck-lab/app"
 base_ref = "main"
 image = "deck-lab-cursor:local"
 engine = "cursor"
