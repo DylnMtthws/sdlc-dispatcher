@@ -88,8 +88,8 @@ does not remove the need to maintain those components.
   onboarding needs an appropriate read-only adapter.
 - The Deck Lab integration contains deployment-specific paths and routing IDs.
   Start a new integration from `examples/project.toml`, not its live registration.
-- DigitalOcean operations require the separate `decklab-infra` scripts and private
-  activation record. A source checkout defaults to a sibling `decklab-infra`;
+- DigitalOcean operations require the separate `mtg/deck-lab/infra` scripts and private
+  activation record. A source checkout defaults to a sibling `mtg/deck-lab/infra`;
   set `DISPATCHER_INFRA_ROOT` for another location or an installed wheel.
 - Model availability and behavior depend on the provider. The local demo uses
   a deterministic fake agent and makes no claims about model quality.
